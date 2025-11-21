@@ -2,49 +2,56 @@
 
 namespace Starter.Shooter
 {
-	/// <summary>
-	/// Structure holding player input.
-	/// </summary>
-	public struct GameplayInput
-	{
-		public Vector2 LookRotation;
-		public Vector2 MoveDirection;
-		public bool Jump;
-		public bool Fire;
-	}
+    /// <summary>
+    /// Structure holding player input.
+    /// </summary>
+    public struct GameplayInput
+    {
+        public Vector2 LookRotation;
+        public Vector2 MoveDirection;
+        public bool Jump;
+        public bool Fire;
 
-	/// <summary>
-	/// PlayerInput handles accumulating player input from Unity.
-	/// </summary>
-	public sealed class PlayerInput : MonoBehaviour
-	{
-		public GameplayInput CurrentInput => _input;
-		private GameplayInput _input;
+        // NEW: Interacción (mantener E para depositar en el altar)
+        public bool Interact;
+    }
 
-		public void ResetInput()
-		{
-			// Reset input after it was used to detect changes correctly again
-			_input.MoveDirection = default;
-			_input.Jump = false;
-			_input.Fire = false;
-		}
+    /// <summary>
+    /// PlayerInput handles accumulating player input from Unity.
+    /// </summary>
+    public sealed class PlayerInput : MonoBehaviour
+    {
+        public GameplayInput CurrentInput => _input;
+        private GameplayInput _input;
 
-		private void Update()
-		{
-			// Accumulate input only if the cursor is locked.
-			if (Cursor.lockState != CursorLockMode.Locked)
-				return;
+        public void ResetInput()
+        {
+            // Reset input after it was used to detect changes correctly again
+            _input.MoveDirection = default;
+            _input.Jump = false;
+            _input.Fire = false;
+            _input.Interact = false; // NEW
+        }
 
-			// Accumulate input from Keyboard/Mouse. Input accumulation is mandatory (at least for look rotation here) as Update can be
-			// called multiple times before next FixedUpdateNetwork is called - common if rendering speed is faster than Fusion simulation.
+        private void Update()
+        {
+            // Accumulate input only if the cursor is locked.
+            if (Cursor.lockState != CursorLockMode.Locked)
+                return;
 
-			_input.LookRotation += new Vector2(-Input.GetAxisRaw("Mouse Y"), Input.GetAxisRaw("Mouse X"));
+            // Accumulate input from Keyboard/Mouse. Input accumulation is mandatory (at least for look rotation here) as Update can be
+            // called multiple times before next FixedUpdateNetwork is called - common if rendering speed is faster than Fusion simulation.
 
-			var moveDirection = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
-			_input.MoveDirection = moveDirection.normalized;
+            _input.LookRotation += new Vector2(-Input.GetAxisRaw("Mouse Y"), Input.GetAxisRaw("Mouse X"));
 
-			_input.Fire |= Input.GetButtonDown("Fire1");
-			_input.Jump |= Input.GetButtonDown("Jump");
-		}
-	}
+            var moveDirection = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
+            _input.MoveDirection = moveDirection.normalized;
+
+            _input.Fire |= Input.GetButtonDown("Fire1");
+            _input.Jump |= Input.GetButtonDown("Jump");
+
+            // NEW: mantener E mientras quieras interactuar con el altar
+            _input.Interact |= Input.GetKey(KeyCode.E);
+        }
+    }
 }
