@@ -6,7 +6,7 @@ using UnityEngine.Rendering;
 namespace Starter.Shooter
 {
     /// <summary>
-    /// Main player script - controls player movement, shooting and now soul collection/deposit.
+    /// Main player script - controls player movement, shooting, souls, altar and grappling hook.
     /// </summary>
     public sealed class Player : NetworkBehaviour
     {
@@ -35,7 +35,7 @@ namespace Starter.Shooter
         public float AirAcceleration = 25f;
         public float AirDeceleration = 1.3f;
 
-        [Header("Fire Setup")]
+        [Header("Fire Setup (Gun)")]
         public LayerMask HitMask;
         public GameObject ImpactPrefab;
         public ParticleSystem MuzzleParticle;
@@ -57,37 +57,53 @@ namespace Starter.Shooter
         [Tooltip("Optional: manually assign; otherwise Player will FindObjectOfType<SoulAltar>() on spawn.")]
         public SoulAltar AltarOverride;
 
+        [Header("Grapple Setup")]
+        [Tooltip("Prefab del proyectil del garfio (debe tener GrappleProjectile + LineRenderer).")]
+        public GameObject GrappleProjectilePrefab;
+
+        [Tooltip("Punta del arma donde empieza la cadena. Si es null, se usa CameraHandle.")]
+        public Transform GrappleMuzzle;
+
+        [Tooltip("Velocidad del proyectil del garfio.")]
+        public float GrappleProjectileSpeed = 40f;
+
+        [Tooltip("Distancia máxima del garfio.")]
+        public float GrappleMaxDistance = 40f;
+
+        [Tooltip("Velocidad a la que el jugador es jalado hacia el punto de impacto.")]
+        public float GrapplePullSpeed = 20f;
+
+        [Tooltip("Distancia mínima al objetivo para terminar el jalón.")]
+        public float GrappleStopDistance = 1.5f;
+
+        [Tooltip("Capas válidas para enganchar el garfio.")]
+        public LayerMask GrappleHitMask;
+
         [Networked, HideInInspector, Capacity(24), OnChangedRender(nameof(OnNicknameChanged))]
         public string Nickname { get; set; }
 
         /// <summary>
-        /// Total souls (carried). Used by UI as contador de almas que llevas encima.
+        /// Total souls (carried). Used by UI as contador de almas actuales.
         /// </summary>
         [Networked, HideInInspector]
         public int ChickenKills { get; set; }
 
         // Souls system
-        /// <summary>Souls currently carried by the player (pure + corrupt).</summary>
         [Networked, HideInInspector]
         public int CarriedSouls { get; set; }
 
-        /// <summary>Pure souls carried (obtained by hunting yokai).</summary>
         [Networked, HideInInspector]
         public int CarriedPureSouls { get; set; }
 
-        /// <summary>Corrupt souls carried (obtained by killing other players).</summary>
         [Networked, HideInInspector]
         public int CarriedCorruptSouls { get; set; }
 
-        /// <summary>Souls already deposited at the altar (pure + corrupt).</summary>
         [Networked, HideInInspector]
         public int BankedSouls { get; set; }
 
-        /// <summary>Pure souls already deposited.</summary>
         [Networked, HideInInspector]
         public int BankedPureSouls { get; set; }
 
-        /// <summary>Corrupt souls already deposited.</summary>
         [Networked, HideInInspector]
         public int BankedCorruptSouls { get; set; }
 
@@ -112,8 +128,13 @@ namespace Starter.Shooter
         private int _visibleFireCount;
 
         private GameManager _gameManager;
-        private SoulAltar _altar;     // Resolved altar instance (override or scene search)
-        private float _depositTimer;  // Timer for holding E near the altar
+        private SoulAltar _altar;
+        private float _depositTimer;
+
+        // Grapple state
+        private bool _isGrappling;
+        private Vector3 _grappleTarget;
+        private GrappleProjectile _activeGrappleProjectile;
 
         public override void Spawned()
         {
@@ -121,38 +142,28 @@ namespace Starter.Shooter
             {
                 _gameManager = FindObjectOfType<GameManager>();
 
-                // Resolve altar reference
                 _altar = AltarOverride != null ? AltarOverride : FindObjectOfType<SoulAltar>();
 
-                // Set player nickname that is saved in UIGameMenu
                 Nickname = PlayerPrefs.GetString("PlayerName");
             }
 
-            // In case the nickname is already changed,
-            // we need to trigger the change manually
             OnNicknameChanged();
 
-            // Reset visible fire count
             _visibleFireCount = _fireCount;
 
             if (HasStateAuthority)
             {
-                // For input authority deactivate head renderers so they are not obstructing the view
                 for (int i = 0; i < HeadRenderers.Length; i++)
                 {
                     HeadRenderers[i].shadowCastingMode = ShadowCastingMode.ShadowsOnly;
                 }
 
-                // Some objects (e.g. weapon) are renderer with secondary Overlay camera.
-                // This prevents weapon clipping into the wall when close to the wall.
                 int overlayLayer = LayerMask.NameToLayer("FirstPersonOverlay");
                 for (int i = 0; i < FirstPersonOverlayObjects.Length; i++)
                 {
                     FirstPersonOverlayObjects[i].layer = overlayLayer;
                 }
 
-                // Look rotation interpolation is skipped for local player.
-                // Look rotation is set manually in Render.
                 KCC.Settings.ForcePredictedLookRotation = true;
             }
         }
@@ -161,13 +172,11 @@ namespace Starter.Shooter
         {
             if (KCC.Position.y < -15f)
             {
-                // Player fell, let's kill him
                 Health.TakeHit(1000);
             }
 
             if (Health.IsFinished)
             {
-                // Si no tenemos referencia al GameManager, la buscamos una vez
                 if (_gameManager == null)
                 {
                     _gameManager = FindObjectOfType<GameManager>();
@@ -177,8 +186,6 @@ namespace Starter.Shooter
 
                 if (_gameManager != null)
                 {
-                    // Durante sudden death (últimos 30 segundos) y antes de que termine la partida,
-                    // las muertes son definitivas.
                     if (_gameManager.IsSuddenDeath && _gameManager.MatchEnded == false)
                     {
                         canRespawn = false;
@@ -190,8 +197,8 @@ namespace Starter.Shooter
                     Respawn(_gameManager.GetSpawnPosition());
                 }
 
-                // Si no puede respawnear, simplemente se queda muerto.
-                // Nos aseguramos de ocultar cualquier UI de depósito activa.
+                _isGrappling = false;
+
                 if (_altar != null)
                 {
                     _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
@@ -203,14 +210,13 @@ namespace Starter.Shooter
             }
 
             var input = Health.IsAlive ? PlayerInput.CurrentInput : default;
+
             ProcessInput(input);
 
-            // Manejo del altar (depositar almas + UI de progreso)
             HandleAltarDeposit(input);
 
             if (KCC.IsGrounded)
             {
-                // Stop jumping
                 _isJumping = false;
             }
 
@@ -223,11 +229,9 @@ namespace Starter.Shooter
         {
             if (HasStateAuthority)
             {
-                // Set look rotation for Render.
                 KCC.SetLookRotation(PlayerInput.CurrentInput.LookRotation, -90f, 90f);
             }
 
-            // Transform velocity vector to local space.
             var moveSpeed = transform.InverseTransformVector(KCC.RealVelocity);
 
             Animator.SetFloat(_animIDSpeedX, moveSpeed.x, 0.1f, Time.deltaTime);
@@ -243,7 +247,6 @@ namespace Starter.Shooter
 
             ShowFireEffects();
 
-            // Disable hits when player is dead
             Hitbox.enabled = Health.IsAlive;
         }
 
@@ -257,21 +260,15 @@ namespace Starter.Shooter
             if (Health.IsAlive == false)
                 return;
 
-            // Update camera pivot (influences ChestIK)
-            // (KCC look rotation is set earlier in Render)
             var pitchRotation = KCC.GetLookRotation(true, false);
             CameraPivot.localRotation = Quaternion.Euler(pitchRotation);
 
-            // Dummy IK solution, we are snapping chest bone to prepared ChestTargetPosition position
-            // Lerping blends the fixed position with little bit of animation position.
             float blendAmount = HasStateAuthority ? 0.05f : 0.2f;
             ChestBone.position = Vector3.Lerp(ChestTargetPosition.position, ChestBone.position, blendAmount);
             ChestBone.rotation = Quaternion.Lerp(ChestTargetPosition.rotation, ChestBone.rotation, blendAmount);
 
-            // Only local player needs to update the camera
             if (HasStateAuthority)
             {
-                // Transfer properties from camera handle to Main Camera.
                 Camera.main.transform.SetPositionAndRotation(CameraHandle.position, CameraHandle.rotation);
             }
         }
@@ -280,132 +277,110 @@ namespace Starter.Shooter
         {
             KCC.SetLookRotation(input.LookRotation, -90f, 90f);
 
-            // It feels better when player falls quicker
+            // Si estamos siendo jalados por el garfio, priorizamos ese movimiento
+            if (_isGrappling)
+            {
+                HandleGrappleMovement();
+                return;
+            }
+
             KCC.SetGravity(KCC.RealVelocity.y >= 0f ? UpGravity : DownGravity);
 
-            // Calculate correct move direction from input (rotated based on latest KCC rotation)
             var moveDirection = KCC.TransformRotation * new Vector3(input.MoveDirection.x, 0f, input.MoveDirection.y);
             var desiredMoveVelocity = moveDirection * WalkSpeed;
 
             float acceleration;
             if (desiredMoveVelocity == Vector3.zero)
             {
-                // No desired move velocity - we are stopping.
-                acceleration = KCC.IsGrounded == true ? GroundDeceleration : AirDeceleration;
+                acceleration = KCC.IsGrounded ? GroundDeceleration : AirDeceleration;
             }
             else
             {
-                acceleration = KCC.IsGrounded == true ? GroundAcceleration : AirAcceleration;
+                acceleration = KCC.IsGrounded ? GroundAcceleration : AirAcceleration;
             }
 
             _moveVelocity = Vector3.Lerp(_moveVelocity, desiredMoveVelocity, acceleration * Runner.DeltaTime);
             float jumpImpulse = 0f;
 
-            // Comparing current input buttons to previous input buttons - this prevents glitches when input is lost
             if (KCC.IsGrounded && input.Jump)
             {
-                // Set world space jump vector
                 jumpImpulse = JumpImpulse;
                 _isJumping = true;
             }
 
             KCC.Move(_moveVelocity, jumpImpulse);
 
-            // Update camera pivot so fire transform (CameraHandle) is correct
             var pitchRotation = KCC.GetLookRotation(true, false);
             CameraPivot.localRotation = Quaternion.Euler(pitchRotation);
 
+            // Click izquierdo: pistola normal
             if (input.Fire)
             {
-                Fire();
+                FireGun();
+            }
+
+            // Click derecho: garfio
+            if (input.AltFire)
+            {
+                FireGrapple();
             }
         }
 
         /// <summary>
-        /// Maneja la lógica de depósito en el altar (mantener E) y notifica al altar
-        /// para que actualice la UI de progreso.
-        /// Solo corre en la autoridad de estado.
+        /// Movimiento durante el jalón del garfio.
         /// </summary>
-        private void HandleAltarDeposit(GameplayInput input)
+        private void HandleGrappleMovement()
         {
-            if (HasStateAuthority == false)
-                return;
+            Vector3 toTarget = _grappleTarget - KCC.Position;
+            float distance = toTarget.magnitude;
 
-            // Resolver altar una vez
-            if (_altar == null)
+            if (distance <= GrappleStopDistance)
             {
-                _altar = AltarOverride != null ? AltarOverride : FindObjectOfType<SoulAltar>();
-            }
-
-            if (_altar == null)
-            {
-                _depositTimer = 0f;
+                _isGrappling = false;
                 return;
             }
 
-            // Si está muerto, no canaliza
-            if (Health.IsAlive == false)
-            {
-                _depositTimer = 0f;
-                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+            Vector3 dir = toTarget.normalized;
+            Vector3 velocity = dir * GrapplePullSpeed;
+
+            KCC.Move(velocity, 0f);
+        }
+
+        /// <summary>
+        /// Llamado por el proyectil de garfio cuando impacta.
+        /// </summary>
+        public void StartGrapple(Vector3 target)
+        {
+            if (!Health.IsAlive)
                 return;
-            }
 
-            // Si no lleva almas, no canaliza
-            if (CarriedSouls <= 0)
+            _grappleTarget = target;
+            _isGrappling = true;
+        }
+
+        /// <summary>
+        /// Llamado por el proyectil cuando se destruye (hit o sin hit).
+        /// </summary>
+        public void OnGrappleProjectileFinished(bool didHit)
+        {
+            _activeGrappleProjectile = null;
+
+            // Si no hubo hit, aseguramos que no quede en modo grappling raro
+            if (!didHit)
             {
-                _depositTimer = 0f;
-                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
-                return;
-            }
-
-            // Distancia al altar
-            float distance = Vector3.Distance(KCC.Position, _altar.transform.position);
-            if (distance > _altar.InteractionRadius)
-            {
-                _depositTimer = 0f;
-                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
-                return;
-            }
-
-            // Está cerca del altar, vivo y con almas encima
-            if (input.Interact)
-            {
-                _depositTimer += Runner.DeltaTime;
-
-                float progress = Mathf.Clamp01(_depositTimer / _altar.HoldTimeToDeposit);
-                float remaining = Mathf.Max(0f, _altar.HoldTimeToDeposit - _depositTimer);
-
-                // Mostrar/actualizar la barra
-                _altar.UpdateDepositUI(true, progress, remaining);
-
-                if (_depositTimer >= _altar.HoldTimeToDeposit)
-                {
-                    // Depósito completado
-                    DepositSoulsIntoAltar();
-
-                    // Reset timer + ocultar UI
-                    _depositTimer = 0f;
-                    _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
-                }
-            }
-            else
-            {
-                // Soltó la E -> cancelar canalización
-                _depositTimer = 0f;
-                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+                _isGrappling = false;
             }
         }
 
-        private void Fire()
+        /// <summary>
+        /// Pistola normal (hitscan).
+        /// </summary>
+        private void FireGun()
         {
-            // Clear hit position in case nothing will be hit
             _hitPosition = Vector3.zero;
 
-            // Whole projectile path and effects are immediately processed (= hitscan projectile)
             if (Physics.Raycast(CameraHandle.position, CameraHandle.forward, out var hitInfo, 200f, HitMask))
             {
-                // Deal damage
                 var health = hitInfo.collider != null ? hitInfo.collider.GetComponentInParent<Health>() : null;
                 if (health != null)
                 {
@@ -413,27 +388,58 @@ namespace Starter.Shooter
                     health.TakeHit(1, true);
                 }
 
-                // Save hit point to correctly show bullet path on all clients.
-                // This however works only for single projectile per FUN and with higher fire cadence
-                // some projectiles might not be fired on proxies because we save only the position
-                // of the LAST hit.
                 _hitPosition = hitInfo.point;
                 _hitNormal = hitInfo.normal;
             }
 
-            // In this example projectile count property (fire count) is used not only for weapon fire effects
-            // but to spawn the projectile visuals themselves.
             _fireCount++;
+        }
+
+        /// <summary>
+        /// Pistola-garfio: dispara un proyectil con cadena.
+        /// </summary>
+        private void FireGrapple()
+        {
+            if (GrappleProjectilePrefab == null)
+                return;
+
+            // No disparar si ya hay un garfio activo o ya estás siendo jalado
+            if (_activeGrappleProjectile != null || _isGrappling)
+                return;
+
+            Transform muzzle = GrappleMuzzle != null ? GrappleMuzzle : CameraHandle;
+            Vector3 spawnPos = muzzle.position;
+
+            // Rotación no es crítica, la dirección REAl viene de la cámara
+            //Quaternion spawnRot = Quaternion.LookRotation(CameraHandle.forward);
+            Quaternion spawnRot = Quaternion.Euler(90, 90, -90); 
+
+            var projGO = Instantiate(GrappleProjectilePrefab, spawnPos, spawnRot);
+            var proj = projGO.GetComponent<GrappleProjectile>();
+            if (proj != null)
+            {
+                _activeGrappleProjectile = proj;
+
+                proj.Init(
+                    this,
+                    muzzle,
+                    CameraHandle.forward,       // Dirección 100% basada en la cámara
+                    GrappleProjectileSpeed,
+                    GrappleMaxDistance,
+                    GrappleHitMask
+                );
+            }
         }
 
         private void Respawn(Vector3 position)
         {
-            // On respawn we only clear what the player was carrying.
-            // Banked souls (already offered at the altar) remain.
             CarriedSouls = 0;
             CarriedPureSouls = 0;
             CarriedCorruptSouls = 0;
             _depositTimer = 0f;
+
+            _isGrappling = false;
+            _activeGrappleProjectile = null;
 
             if (_altar != null)
             {
@@ -450,12 +456,69 @@ namespace Starter.Shooter
             _moveVelocity = Vector3.zero;
         }
 
-        /// <summary>
-        /// Called when this player has killed another entity (chicken or player).
-        /// </summary>
+        private void HandleAltarDeposit(GameplayInput input)
+        {
+            if (HasStateAuthority == false)
+                return;
+
+            if (_altar == null)
+            {
+                _altar = AltarOverride != null ? AltarOverride : FindObjectOfType<SoulAltar>();
+            }
+
+            if (_altar == null)
+            {
+                _depositTimer = 0f;
+                return;
+            }
+
+            if (Health.IsAlive == false)
+            {
+                _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+                return;
+            }
+
+            if (CarriedSouls <= 0)
+            {
+                _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+                return;
+            }
+
+            float distance = Vector3.Distance(KCC.Position, _altar.transform.position);
+            if (distance > _altar.InteractionRadius)
+            {
+                _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+                return;
+            }
+
+            if (input.Interact)
+            {
+                _depositTimer += Runner.DeltaTime;
+
+                float progress = Mathf.Clamp01(_depositTimer / _altar.HoldTimeToDeposit);
+                float remaining = Mathf.Max(0f, _altar.HoldTimeToDeposit - _depositTimer);
+
+                _altar.UpdateDepositUI(true, progress, remaining);
+
+                if (_depositTimer >= _altar.HoldTimeToDeposit)
+                {
+                    DepositSoulsIntoAltar();
+                    _depositTimer = 0f;
+                    _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+                }
+            }
+            else
+            {
+                _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+            }
+        }
+
         private void OnEnemyKilled(Health enemyHealth)
         {
-            // Chicken / yokai = pure souls
             if (enemyHealth.GetComponent<Chicken>() != null)
             {
                 CarriedPureSouls += 1;
@@ -465,7 +528,6 @@ namespace Starter.Shooter
                 return;
             }
 
-            // Player kill = steal 60% of carried souls from the victim
             var victimPlayer = enemyHealth.GetComponent<Player>();
             if (victimPlayer != null)
             {
@@ -475,10 +537,6 @@ namespace Starter.Shooter
             UpdateTotalSouls(this);
         }
 
-        /// <summary>
-        /// Steals 60% of the souls the victim is currently carrying.
-        /// Stolen souls become corrupt on the killer.
-        /// </summary>
         private void StealSoulsFromPlayer(Player victim)
         {
             if (victim == null)
@@ -488,12 +546,10 @@ namespace Starter.Shooter
             if (victimCarried <= 0)
                 return;
 
-            // 60% of carried souls, floored
             int amountToSteal = Mathf.FloorToInt(victimCarried * 0.6f);
             if (amountToSteal <= 0)
                 return;
 
-            // Remove from victim: first from pure, then from corrupt
             int stealFromPure = Mathf.Min(amountToSteal, victim.CarriedPureSouls);
             int stealFromCorrupt = amountToSteal - stealFromPure;
             stealFromCorrupt = Mathf.Min(stealFromCorrupt, victim.CarriedCorruptSouls);
@@ -504,7 +560,6 @@ namespace Starter.Shooter
             if (victim.CarriedSouls < 0)
                 victim.CarriedSouls = 0;
 
-            // All stolen souls become corrupt on the killer
             CarriedCorruptSouls += amountToSteal;
             CarriedSouls += amountToSteal;
 
@@ -512,35 +567,23 @@ namespace Starter.Shooter
             UpdateTotalSouls(this);
         }
 
-        /// <summary>
-        /// Deposits all carried souls into the altar as banked souls.
-        /// Pure stay pure, corrupt stay corrupt.
-        /// </summary>
         private void DepositSoulsIntoAltar()
         {
             if (CarriedSouls <= 0)
                 return;
 
-            // Mover lo que llevas al banco
             BankedPureSouls += CarriedPureSouls;
             BankedCorruptSouls += CarriedCorruptSouls;
 
-            // Limpiar lo que llevas encima
             CarriedPureSouls = 0;
             CarriedCorruptSouls = 0;
             CarriedSouls = 0;
 
-            // Recalcular total bancado
             BankedSouls = BankedPureSouls + BankedCorruptSouls;
 
-            // Actualizar contador visible (al depositar, se va a 0)
             UpdateTotalSouls(this);
         }
 
-        /// <summary>
-        /// Keeps ChickenKills in sync as carried souls.
-        /// This is used by UI para mostrar "Almas" actuales.
-        /// </summary>
         private static void UpdateTotalSouls(Player p)
         {
             if (p == null)
@@ -551,10 +594,6 @@ namespace Starter.Shooter
 
         private void ShowFireEffects()
         {
-            // Notice we are not using OnChangedRender for fireCount property but instead
-            // we are checking against a local variable and show fire effects only when visible
-            // fire count is SMALLER. This prevents triggering false fire effects when
-            // local player mispredicted fire (e.g. input got lost) and fireCount property got decreased.
             if (_visibleFireCount < _fireCount)
             {
                 FireSound.PlayOneShot(FireSound.clip);
@@ -563,7 +602,6 @@ namespace Starter.Shooter
 
                 if (_hitPosition != Vector3.zero)
                 {
-                    // Impact gets destroyed automatically with DestroyAfter script
                     Instantiate(ImpactPrefab, _hitPosition, Quaternion.LookRotation(_hitNormal));
                 }
             }
@@ -600,7 +638,7 @@ namespace Starter.Shooter
         private void OnNicknameChanged()
         {
             if (HasStateAuthority)
-                return; // Do not show nickname for local player
+                return;
 
             Nameplate.SetNickname(Nickname);
         }

@@ -10,10 +10,9 @@ namespace Starter.Shooter
         public Vector2 LookRotation;
         public Vector2 MoveDirection;
         public bool Jump;
-        public bool Fire;
-
-        // NEW: Interacción (mantener E para depositar en el altar)
-        public bool Interact;
+        public bool Fire;      // Disparo normal (pistola)
+        public bool AltFire;   // Disparo alternativo (garfio)
+        public bool Interact;  // E (altar)
     }
 
     /// <summary>
@@ -30,7 +29,8 @@ namespace Starter.Shooter
             _input.MoveDirection = default;
             _input.Jump = false;
             _input.Fire = false;
-            _input.Interact = false; // NEW
+            _input.AltFire = false;
+            _input.Interact = false;
         }
 
         private void Update()
@@ -39,18 +39,23 @@ namespace Starter.Shooter
             if (Cursor.lockState != CursorLockMode.Locked)
                 return;
 
-            // Accumulate input from Keyboard/Mouse. Input accumulation is mandatory (at least for look rotation here) as Update can be
-            // called multiple times before next FixedUpdateNetwork is called - common if rendering speed is faster than Fusion simulation.
-
+            // Mirar
             _input.LookRotation += new Vector2(-Input.GetAxisRaw("Mouse Y"), Input.GetAxisRaw("Mouse X"));
 
+            // Movimiento
             var moveDirection = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
             _input.MoveDirection = moveDirection.normalized;
 
-            _input.Fire |= Input.GetButtonDown("Fire1");
+            // Disparo primario (pistola normal)
+            _input.Fire |= Input.GetButtonDown("Fire1");   // click izquierdo
+
+            // Disparo alternativo (garfio)
+            _input.AltFire |= Input.GetButtonDown("Fire2"); // click derecho
+
+            // Saltar
             _input.Jump |= Input.GetButtonDown("Jump");
 
-            // NEW: mantener E mientras quieras interactuar con el altar
+            // Interacción (altar)
             _input.Interact |= Input.GetKey(KeyCode.E);
         }
     }
