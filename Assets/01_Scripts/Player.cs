@@ -61,12 +61,12 @@ namespace Starter.Shooter
         public string Nickname { get; set; }
 
         /// <summary>
-        /// Total souls (carried + banked). Kept for backward-compatibility with UI/BestHunter logic.
+        /// Total souls (carried). Used by UI as contador de almas que llevas encima.
         /// </summary>
         [Networked, HideInInspector]
         public int ChickenKills { get; set; }
 
-        // NEW: Souls system
+        // Souls system
         /// <summary>Souls currently carried by the player (pure + corrupt).</summary>
         [Networked, HideInInspector]
         public int CarriedSouls { get; set; }
@@ -167,14 +167,45 @@ namespace Starter.Shooter
 
             if (Health.IsFinished)
             {
-                // Player is dead and death timer is finished, let's respawn the player
-                Respawn(_gameManager.GetSpawnPosition());
+                // Si no tenemos referencia al GameManager, la buscamos una vez
+                if (_gameManager == null)
+                {
+                    _gameManager = FindObjectOfType<GameManager>();
+                }
+
+                bool canRespawn = true;
+
+                if (_gameManager != null)
+                {
+                    // Durante sudden death (últimos 30 segundos) y antes de que termine la partida,
+                    // las muertes son definitivas.
+                    if (_gameManager.IsSuddenDeath && _gameManager.MatchEnded == false)
+                    {
+                        canRespawn = false;
+                    }
+                }
+
+                if (canRespawn)
+                {
+                    Respawn(_gameManager.GetSpawnPosition());
+                }
+
+                // Si no puede respawnear, simplemente se queda muerto.
+                // Nos aseguramos de ocultar cualquier UI de depósito activa.
+                if (_altar != null)
+                {
+                    _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+                }
+
+                KCC.SetActive(false);
+                PlayerInput.ResetInput();
+                return;
             }
 
             var input = Health.IsAlive ? PlayerInput.CurrentInput : default;
             ProcessInput(input);
 
-            // NEW: handle altar deposit (only on state authority)
+            // Manejo del altar (depositar almas + UI de progreso)
             HandleAltarDeposit(input);
 
             if (KCC.IsGrounded)
@@ -291,15 +322,16 @@ namespace Starter.Shooter
         }
 
         /// <summary>
-        /// Handles deposit logic while player is near the altar and holding Interact (E).
-        /// Only runs on state authority.
+        /// Maneja la lógica de depósito en el altar (mantener E) y notifica al altar
+        /// para que actualice la UI de progreso.
+        /// Solo corre en la autoridad de estado.
         /// </summary>
         private void HandleAltarDeposit(GameplayInput input)
         {
             if (HasStateAuthority == false)
                 return;
 
-            // Resolve altar in case it wasn't cached yet
+            // Resolver altar una vez
             if (_altar == null)
             {
                 _altar = AltarOverride != null ? AltarOverride : FindObjectOfType<SoulAltar>();
@@ -311,40 +343,57 @@ namespace Starter.Shooter
                 return;
             }
 
+            // Si está muerto, no canaliza
             if (Health.IsAlive == false)
             {
                 _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
                 return;
             }
 
+            // Si no lleva almas, no canaliza
             if (CarriedSouls <= 0)
             {
                 _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
                 return;
             }
 
-            // Check distance to altar
+            // Distancia al altar
             float distance = Vector3.Distance(KCC.Position, _altar.transform.position);
             if (distance > _altar.InteractionRadius)
             {
                 _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
                 return;
             }
 
-            // Player must hold Interact (E) to deposit
+            // Está cerca del altar, vivo y con almas encima
             if (input.Interact)
             {
                 _depositTimer += Runner.DeltaTime;
 
+                float progress = Mathf.Clamp01(_depositTimer / _altar.HoldTimeToDeposit);
+                float remaining = Mathf.Max(0f, _altar.HoldTimeToDeposit - _depositTimer);
+
+                // Mostrar/actualizar la barra
+                _altar.UpdateDepositUI(true, progress, remaining);
+
                 if (_depositTimer >= _altar.HoldTimeToDeposit)
                 {
+                    // Depósito completado
                     DepositSoulsIntoAltar();
+
+                    // Reset timer + ocultar UI
                     _depositTimer = 0f;
+                    _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
                 }
             }
             else
             {
+                // Soltó la E -> cancelar canalización
                 _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
             }
         }
 
@@ -385,6 +434,11 @@ namespace Starter.Shooter
             CarriedPureSouls = 0;
             CarriedCorruptSouls = 0;
             _depositTimer = 0f;
+
+            if (_altar != null)
+            {
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+            }
 
             UpdateTotalSouls(this);
 
@@ -479,14 +533,13 @@ namespace Starter.Shooter
             // Recalcular total bancado
             BankedSouls = BankedPureSouls + BankedCorruptSouls;
 
-            // Actualizar contador visible
+            // Actualizar contador visible (al depositar, se va a 0)
             UpdateTotalSouls(this);
         }
 
-
         /// <summary>
-        /// Keeps ChickenKills in sync as (carried + banked).
-        /// This is used by UI and GameManager.
+        /// Keeps ChickenKills in sync as carried souls.
+        /// This is used by UI para mostrar "Almas" actuales.
         /// </summary>
         private static void UpdateTotalSouls(Player p)
         {

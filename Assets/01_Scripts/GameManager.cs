@@ -4,18 +4,38 @@ using Fusion;
 namespace Starter.Shooter
 {
     /// <summary>
-    /// Handles player connections (spawning of Player instances) and tracks best soul hoarder.
+    /// Handles player connections (spawning of Player instances) and match flow:
+    /// - Spawns players
+    /// - Keeps track of best hunter (by banked souls)
+    /// - Controls match timer, sudden death and match end.
     /// </summary>
     public sealed class GameManager : NetworkBehaviour
     {
+        [Header("Setup")]
         public Player PlayerPrefab;
+
+        [Header("Match Setup")]
+        [Tooltip("Duración de la partida en segundos (7 minutos = 420).")]
+        public float MatchDurationSeconds = 420f; // 7 minutos
 
         [Networked]
         public PlayerRef BestHunter { get; set; }
 
-        // Cuántas almas bancadas tiene el mejor cazador
+        // Cuántas almas bancadas tiene el mejor cazador (en el altar)
         [Networked]
         public int BestHunterBankedSouls { get; set; }
+
+        // Tiempo restante de partida (segundos)
+        [Networked]
+        public float MatchTimeRemaining { get; set; }
+
+        // Últimos 30 segundos: muertes definitivas
+        [Networked]
+        public NetworkBool IsSuddenDeath { get; set; }
+
+        // Bandera de fin de partida
+        [Networked]
+        public NetworkBool MatchEnded { get; set; }
 
         public Player LocalPlayer { get; private set; }
 
@@ -32,12 +52,51 @@ namespace Starter.Shooter
         {
             _spawnPoints = FindObjectsOfType<SpawnPoint>();
 
+            // Spawn local player
             LocalPlayer = Runner.Spawn(PlayerPrefab, GetSpawnPosition(), Quaternion.identity, Runner.LocalPlayer);
             Runner.SetPlayerObject(Runner.LocalPlayer, LocalPlayer.Object);
+
+            // Inicializar timer solo en la autoridad
+            if (Object.HasStateAuthority)
+            {
+                if (MatchTimeRemaining <= 0f)
+                {
+                    MatchTimeRemaining = MatchDurationSeconds;
+                    IsSuddenDeath = false;
+                    MatchEnded = false;
+                }
+            }
         }
 
         public override void FixedUpdateNetwork()
         {
+            // Solo la autoridad de estado actualiza lógica de partida
+            if (Object.HasStateAuthority == false)
+                return;
+
+            // 1) Actualizar timer y estado de partida
+            if (MatchEnded == false)
+            {
+                MatchTimeRemaining -= Runner.DeltaTime;
+                if (MatchTimeRemaining < 0f)
+                {
+                    MatchTimeRemaining = 0f;
+                }
+
+                // Últimos 30 segundos -> sudden death
+                if (IsSuddenDeath == false && MatchTimeRemaining <= 30f)
+                {
+                    IsSuddenDeath = true;
+                }
+
+                // Fin de partida
+                if (MatchTimeRemaining <= 0f)
+                {
+                    MatchEnded = true;
+                }
+            }
+
+            // 2) Recalcular mejor cazador por almas bancadas (siempre, para que el top quede bien)
             BestHunter = PlayerRef.None;
             BestHunterBankedSouls = 0;
 
@@ -51,8 +110,6 @@ namespace Starter.Shooter
 
                 int banked = player.BankedSouls;
 
-                // IMPORTANTE: ya no filtramos por Health.IsAlive
-                // El top sigue siéndolo aunque esté muerto, mientras nadie lo supere en almas depositadas.
                 if (banked > BestHunterBankedSouls)
                 {
                     BestHunterBankedSouls = banked;
@@ -63,7 +120,7 @@ namespace Starter.Shooter
 
         public override void Despawned(NetworkRunner runner, bool hasState)
         {
-            // Limpiar referencia porque la UI puede intentar acceder incluso después de despawn
+            // Clear the reference because UI can try to access it even after despawn
             LocalPlayer = null;
         }
     }
