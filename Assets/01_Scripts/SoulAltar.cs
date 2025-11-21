@@ -1,16 +1,24 @@
 using UnityEngine;
 
-public class SoulAltar : MonoBehaviour
+namespace Starter.Shooter
 {
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
+    /// <summary>
+    /// Simple altar where players can deposit the souls they carry.
+    /// Player checks distance + E key + hold time.
+    /// </summary>
+    public class SoulAltar : MonoBehaviour
     {
-        
-    }
+        [Header("Interaction")]
+        [Tooltip("Radius in world units within which the player can start depositing souls.")]
+        public float InteractionRadius = 3f;
 
-    // Update is called once per frame
-    void Update()
-    {
-        
+        [Tooltip("Seconds holding the interact key (E) to complete the deposit.")]
+        public float HoldTimeToDeposit = 6f;
+
+        private void OnDrawGizmosSelected()
+        {
+            Gizmos.color = Color.magenta;
+            Gizmos.DrawWireSphere(transform.position, InteractionRadius);
+        }
     }
 }
