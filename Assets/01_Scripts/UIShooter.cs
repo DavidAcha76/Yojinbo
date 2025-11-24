@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+Ôªøusing System.Collections.Generic;
 using System.Text;
 using Fusion;
 using TMPro;
@@ -12,6 +12,8 @@ namespace Starter.Shooter
     /// </summary>
     public class UIShooter : MonoBehaviour
     {
+        public static UIShooter Instance { get; private set; }
+
         [Header("References")]
         public GameManager GameManager;
         public CanvasGroup CanvasGroup;
@@ -39,11 +41,29 @@ namespace Starter.Shooter
         public GameObject EndGameGroup;
         public TextMeshProUGUI EndGameTopText;
 
-        [Tooltip("Canvas/grupo para el final benevolente (m·s almas puras que corruptas).")]
+        [Tooltip("Canvas/grupo para el final benevolente (m√°s almas puras que corruptas).")]
         public GameObject BenevolentEndingGroup;
 
-        [Tooltip("Canvas/grupo para el final tirano (m·s almas corruptas que puras).")]
+        [Tooltip("Canvas/grupo para el final tirano (m√°s almas corruptas que puras).")]
         public GameObject TyrantEndingGroup;
+
+        [Header("Ammo UI")]
+        [Tooltip("Texto para mostrar la munici√≥n del jugador local.")]
+        public TextMeshProUGUI AmmoText;
+
+        [Header("Kill Text UI")]
+        [Tooltip("Texto que muestra 'Mataste a <nombre>' durante unos segundos.")]
+        public TextMeshProUGUI KillText;
+
+        [Tooltip("Tiempo que dura visible el texto de kill en segundos.")]
+        public float KillTextDuration = 5f;
+
+        [Header("Scoreboard (Tab)")]
+        [Tooltip("Canvas que muestra el top de jugadores al presionar Tab.")]
+        public GameObject ScoreboardCanvas;
+
+        [Tooltip("Texto con el top de jugadores mientras Tab est√° presionado.")]
+        public TextMeshProUGUI ScoreboardText;
 
         private int _lastChickens = -1;
         private int _lastHealth = -1;
@@ -51,6 +71,14 @@ namespace Starter.Shooter
 
         private bool _lastMatchEnded = false;
         private float _endGameTimer = 0f;
+
+        // Timer interno para el texto de kill
+        private float _killTextTimer = 0f;
+
+        private void Awake()
+        {
+            Instance = this;
+        }
 
         private void OnEnable()
         {
@@ -62,6 +90,15 @@ namespace Starter.Shooter
             if (EndGameGroup != null) EndGameGroup.SetActive(false);
             if (BenevolentEndingGroup != null) BenevolentEndingGroup.SetActive(false);
             if (TyrantEndingGroup != null) TyrantEndingGroup.SetActive(false);
+
+            if (ScoreboardCanvas != null) ScoreboardCanvas.SetActive(false);
+
+            // Inicializar texto de kill
+            if (KillText != null)
+            {
+                KillText.text = string.Empty;
+                KillText.gameObject.SetActive(false);
+            }
         }
 
         private void Update()
@@ -160,7 +197,7 @@ namespace Starter.Shooter
             // ======================
             // SOULS UI (almas actuales que llevas encima)
             // ======================
-            int currentSouls = player.ChickenKills; // aquÌ guardas las almas que llevas encima
+            int currentSouls = player.ChickenKills; // aqu√≠ guardas las almas que llevas encima
 
             // Sonido solo cuando cambia la cantidad de almas que llevas encima
             if (currentSouls != _lastChickens)
@@ -173,7 +210,7 @@ namespace Starter.Shooter
                 _lastChickens = currentSouls;
             }
 
-            // Siempre refrescamos texto, asÌ al depositar se ve al instante
+            // Siempre refrescamos texto, as√≠ al depositar se ve al instante
             CanvasGroup.alpha = 1f;
 
             if (ChickenCount != null)
@@ -223,17 +260,47 @@ namespace Starter.Shooter
             }
 
             // ======================
-            // FIN DE PARTIDA + TOP + FINALES
+            // AMMO UI
+            // ======================
+            if (AmmoText != null)
+            {
+                if (player.IsDemonForm)
+                {
+                    AmmoText.text = "Balas: ‚àû";
+                }
+                else
+                {
+                    AmmoText.text = $"Balas: {player.CurrentAmmo}/{player.MaxAmmo}";
+                }
+            }
+
+            // ======================
+            // SCOREBOARD (TAB mientras se mantiene pulsado)
             // ======================
             bool matchEnded = GameManager.MatchEnded;
+            bool tabPressed = Input.GetKey(KeyCode.Tab);
 
-            // Detectar transiciÛn de "no terminado" -> "terminado"
+            if (ScoreboardCanvas != null)
+            {
+                bool showScoreboard = tabPressed && !matchEnded;
+                ScoreboardCanvas.SetActive(showScoreboard);
+
+                if (showScoreboard && ScoreboardText != null)
+                {
+                    ScoreboardText.text = BuildLeaderboardText();
+                }
+            }
+
+            // ======================
+            // FIN DE PARTIDA + TOP + FINALES
+            // ======================
+
             if (matchEnded && _lastMatchEnded == false)
             {
                 _lastMatchEnded = true;
                 _endGameTimer = 0f;
 
-                // Activar canvas del top
+                // Activar canvas del top final
                 if (EndGameGroup != null) EndGameGroup.SetActive(true);
                 if (BenevolentEndingGroup != null) BenevolentEndingGroup.SetActive(false);
                 if (TyrantEndingGroup != null) TyrantEndingGroup.SetActive(false);
@@ -258,7 +325,7 @@ namespace Starter.Shooter
             {
                 _endGameTimer += Time.deltaTime;
 
-                // DespuÈs de 6 segundos, ocultamos el top y mostramos final seg˙n pureza/corrupciÛn
+                // Despu√©s de 6 segundos, ocultamos el top y mostramos final seg√∫n pureza/corrupci√≥n
                 if (_endGameTimer >= 6f)
                 {
                     if (EndGameGroup != null) EndGameGroup.SetActive(false);
@@ -280,8 +347,25 @@ namespace Starter.Shooter
                     }
                 }
             }
+
+            // ======================
+            // KILL TEXT TIMER
+            // ======================
+            if (KillText != null && _killTextTimer > 0f)
+            {
+                _killTextTimer -= Time.deltaTime;
+                if (_killTextTimer <= 0f)
+                {
+                    _killTextTimer = 0f;
+                    KillText.text = string.Empty;
+                    KillText.gameObject.SetActive(false);
+                }
+            }
         }
 
+        /// <summary>
+        /// Construye el texto del leaderboard ordenado por almas bancadas.
+        /// </summary>
         private string BuildLeaderboardText()
         {
             if (GameManager == null || GameManager.Runner == null)
@@ -318,6 +402,25 @@ namespace Starter.Shooter
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Muestra "Mataste a &lt;nombre&gt;" durante KillTextDuration segundos.
+        /// Llamar desde Player.OnEnemyKilled cuando matas a otro jugador.
+        /// </summary>
+        public void RegisterKill(string victimName)
+        {
+            if (KillText == null)
+                return;
+
+            if (string.IsNullOrWhiteSpace(victimName))
+            {
+                victimName = "Jugador";
+            }
+
+            KillText.text = $"Mataste a {victimName}";
+            KillText.gameObject.SetActive(true);
+            _killTextTimer = KillTextDuration;
         }
     }
 }
