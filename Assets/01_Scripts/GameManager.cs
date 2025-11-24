@@ -5,6 +5,8 @@ namespace Starter.Shooter
 {
     public sealed class GameManager : NetworkBehaviour
     {
+        public static GameManager Instance { get; private set; }
+
         [Header("Setup")]
         public Player PlayerPrefab;
 
@@ -48,6 +50,8 @@ namespace Starter.Shooter
 
         public override void Spawned()
         {
+            Instance = this;
+
             _spawnPoints = FindObjectsOfType<SpawnPoint>();
 
             LocalPlayer = Runner.Spawn(PlayerPrefab, GetSpawnPosition(), Quaternion.identity, Runner.LocalPlayer);
@@ -152,7 +156,23 @@ namespace Starter.Shooter
 
         public override void Despawned(NetworkRunner runner, bool hasState)
         {
+            if (Instance == this)
+                Instance = null;
+
             LocalPlayer = null;
+        }
+
+        public static float GetWorldDeltaTime(NetworkRunner runner)
+        {
+            if (Instance == null)
+            {
+                return runner != null ? runner.DeltaTime : Time.fixedDeltaTime;
+            }
+
+            if (Instance.IsTimeStopped)
+                return 0f;
+
+            return runner != null ? runner.DeltaTime : Time.fixedDeltaTime;
         }
     }
 }
