@@ -16,6 +16,7 @@ namespace Starter.Shooter
         public bool Invisibility;
         public bool Heal;
         public bool Cage;
+        public bool TimeStop;
     }
 
     public sealed class PlayerInput : MonoBehaviour
@@ -36,6 +37,7 @@ namespace Starter.Shooter
             _input.Invisibility = false;
             _input.Heal = false;
             _input.Cage = false;
+            _input.TimeStop = false;
         }
 
         private void Update()
@@ -58,6 +60,7 @@ namespace Starter.Shooter
             _input.Invisibility |= Input.GetKeyDown(KeyCode.F);
             _input.Heal |= Input.GetKeyDown(KeyCode.Q);
             _input.Cage |= Input.GetKeyDown(KeyCode.C);
+            _input.TimeStop |= Input.GetKeyDown(KeyCode.P);
         }
     }
 }

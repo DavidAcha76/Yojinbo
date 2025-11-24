@@ -3,12 +3,6 @@ using Fusion;
 
 namespace Starter.Shooter
 {
-    /// <summary>
-    /// Handles player connections (spawning of Player instances) and match flow:
-    /// - Spawns players
-    /// - Keeps track of best hunter (by banked souls)
-    /// - Controls match timer, sudden death and match end.
-    /// </summary>
     public sealed class GameManager : NetworkBehaviour
     {
         [Header("Setup")]
@@ -16,26 +10,30 @@ namespace Starter.Shooter
 
         [Header("Match Setup")]
         [Tooltip("Duración de la partida en segundos (7 minutos = 420).")]
-        public float MatchDurationSeconds = 420f; // 7 minutos
+        public float MatchDurationSeconds = 420f;
 
         [Networked]
         public PlayerRef BestHunter { get; set; }
 
-        // Cuántas almas bancadas tiene el mejor cazador (en el altar)
         [Networked]
         public int BestHunterBankedSouls { get; set; }
 
-        // Tiempo restante de partida (segundos)
         [Networked]
         public float MatchTimeRemaining { get; set; }
 
-        // Últimos 30 segundos: muertes definitivas
         [Networked]
         public NetworkBool IsSuddenDeath { get; set; }
 
-        // Bandera de fin de partida
         [Networked]
         public NetworkBool MatchEnded { get; set; }
+
+        [Header("Time Stop Audio")]
+        public AudioSource TimeStopGlobalAudio;
+        public AudioClip TimeStopStartClip;
+        public AudioClip TimeStopEndClip;
+
+        [Networked, OnChangedRender(nameof(OnTimeStoppedChanged))]
+        public NetworkBool IsTimeStopped { get; set; }
 
         public Player LocalPlayer { get; private set; }
 
@@ -52,11 +50,9 @@ namespace Starter.Shooter
         {
             _spawnPoints = FindObjectsOfType<SpawnPoint>();
 
-            // Spawn local player
             LocalPlayer = Runner.Spawn(PlayerPrefab, GetSpawnPosition(), Quaternion.identity, Runner.LocalPlayer);
             Runner.SetPlayerObject(Runner.LocalPlayer, LocalPlayer.Object);
 
-            // Inicializar timer solo en la autoridad
             if (Object.HasStateAuthority)
             {
                 if (MatchTimeRemaining <= 0f)
@@ -64,39 +60,57 @@ namespace Starter.Shooter
                     MatchTimeRemaining = MatchDurationSeconds;
                     IsSuddenDeath = false;
                     MatchEnded = false;
+                    IsTimeStopped = false;
                 }
             }
         }
 
         public override void FixedUpdateNetwork()
         {
-            // Solo la autoridad de estado actualiza lógica de partida
             if (Object.HasStateAuthority == false)
                 return;
 
-            // 1) Actualizar timer y estado de partida
+            bool timeStopped = false;
+
+            foreach (var playerRef in Runner.ActivePlayers)
+            {
+                var playerObject = Runner.GetPlayerObject(playerRef);
+                var player = playerObject != null ? playerObject.GetComponent<Player>() : null;
+
+                if (player == null)
+                    continue;
+
+                if (player.TimeStopActive)
+                {
+                    timeStopped = true;
+                    break;
+                }
+            }
+
+            IsTimeStopped = timeStopped;
+
             if (MatchEnded == false)
             {
-                MatchTimeRemaining -= Runner.DeltaTime;
-                if (MatchTimeRemaining < 0f)
+                if (!IsTimeStopped)
                 {
-                    MatchTimeRemaining = 0f;
+                    MatchTimeRemaining -= Runner.DeltaTime;
+                    if (MatchTimeRemaining < 0f)
+                    {
+                        MatchTimeRemaining = 0f;
+                    }
                 }
 
-                // Últimos 30 segundos -> sudden death
                 if (IsSuddenDeath == false && MatchTimeRemaining <= 30f)
                 {
                     IsSuddenDeath = true;
                 }
 
-                // Fin de partida
                 if (MatchTimeRemaining <= 0f)
                 {
                     MatchEnded = true;
                 }
             }
 
-            // 2) Recalcular mejor cazador por almas bancadas (siempre, para que el top quede bien)
             BestHunter = PlayerRef.None;
             BestHunterBankedSouls = 0;
 
@@ -118,9 +132,26 @@ namespace Starter.Shooter
             }
         }
 
+        private void OnTimeStoppedChanged()
+        {
+            if (IsTimeStopped)
+            {
+                if (TimeStopGlobalAudio != null && TimeStopStartClip != null)
+                {
+                    TimeStopGlobalAudio.PlayOneShot(TimeStopStartClip);
+                }
+            }
+            else
+            {
+                if (TimeStopGlobalAudio != null && TimeStopEndClip != null)
+                {
+                    TimeStopGlobalAudio.PlayOneShot(TimeStopEndClip);
+                }
+            }
+        }
+
         public override void Despawned(NetworkRunner runner, bool hasState)
         {
-            // Clear the reference because UI can try to access it even after despawn
             LocalPlayer = null;
         }
     }

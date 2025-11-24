@@ -117,8 +117,6 @@ namespace Starter.Shooter
 
         private float _reloadTimer;
         private bool _reloadWasPlaying;
-
-        [Header("Reload Shoot Animation")]
         public float ReloadShootAnimInterval = 0.4f;
         private float _reloadAnimTimer;
 
@@ -154,6 +152,16 @@ namespace Starter.Shooter
         public NetworkObject CagePrefab;
         public float CageDuration = 30f;
         public int CageSoulCost = 10;
+
+        [Header("Time Stop Ultimate (P)")]
+        public int TimeStopSoulCost = 30;
+        public float TimeStopDuration = 6f;
+
+        [Networked]
+        public NetworkBool TimeStopActive { get; set; }
+
+        [Networked]
+        private float TimeStopTimer { get; set; }
 
         public bool IsTransformed => _isTransformed;
         public bool IsAngelForm => _isTransformed && _isAngelForm;
@@ -219,11 +227,14 @@ namespace Starter.Shooter
         private Vector3 _grappleTarget;
         private GrappleProjectile _activeGrappleProjectile;
 
+        private bool _lastAudioMuted;
+
         public override void Spawned()
         {
+            _gameManager = FindObjectOfType<GameManager>();
+
             if (HasStateAuthority)
             {
-                _gameManager = FindObjectOfType<GameManager>();
                 _altar = AltarOverride != null ? AltarOverride : FindObjectOfType<SoulAltar>();
                 Nickname = PlayerPrefs.GetString("PlayerName");
                 CurrentAmmo = MaxAmmo;
@@ -232,6 +243,8 @@ namespace Starter.Shooter
                 _isAngelForm = false;
                 _demonSpecialCharges = 0;
                 _isReloading = false;
+                TimeStopActive = false;
+                TimeStopTimer = 0f;
             }
 
             OnNicknameChanged();
@@ -265,6 +278,24 @@ namespace Starter.Shooter
 
         public override void FixedUpdateNetwork()
         {
+            if (_gameManager == null)
+            {
+                _gameManager = FindObjectOfType<GameManager>();
+            }
+
+            bool globalStopped = _gameManager != null && _gameManager.IsTimeStopped;
+            bool myTimeFlow = !globalStopped || TimeStopActive;
+
+            if (HasStateAuthority && TimeStopActive)
+            {
+                TimeStopTimer -= Runner.DeltaTime;
+                if (TimeStopTimer <= 0f)
+                {
+                    TimeStopActive = false;
+                    TimeStopTimer = 0f;
+                }
+            }
+
             if (KCC.Position.y < -15f && !_isTransformed)
             {
                 Health.TakeHit(1000);
@@ -290,6 +321,7 @@ namespace Starter.Shooter
                 StopReloadSound();
                 StopTransformLoops();
                 CancelInvisibilityIfActive();
+                CancelTimeStop();
 
                 if (canRespawn)
                 {
@@ -308,36 +340,39 @@ namespace Starter.Shooter
                 return;
             }
 
-            if (_specialShotCooldownTimer > 0f)
+            if (myTimeFlow)
             {
-                _specialShotCooldownTimer -= Runner.DeltaTime;
-                if (_specialShotCooldownTimer < 0f)
-                    _specialShotCooldownTimer = 0f;
-            }
-
-            if (HasStateAuthority && _isReloading)
-            {
-                _reloadTimer -= Runner.DeltaTime;
-                if (_reloadTimer <= 0f)
+                if (_specialShotCooldownTimer > 0f)
                 {
-                    _isReloading = false;
-                    CurrentAmmo = MaxAmmo;
+                    _specialShotCooldownTimer -= Runner.DeltaTime;
+                    if (_specialShotCooldownTimer < 0f)
+                        _specialShotCooldownTimer = 0f;
                 }
-            }
 
-            if (HasStateAuthority && _isTransformed)
-            {
-                _transformTimer -= Runner.DeltaTime;
-                if (_transformTimer <= 0f)
+                if (HasStateAuthority && _isReloading)
                 {
-                    EndTransformation();
+                    _reloadTimer -= Runner.DeltaTime;
+                    if (_reloadTimer <= 0f)
+                    {
+                        _isReloading = false;
+                        CurrentAmmo = MaxAmmo;
+                    }
+                }
+
+                if (HasStateAuthority && _isTransformed)
+                {
+                    _transformTimer -= Runner.DeltaTime;
+                    if (_transformTimer <= 0f)
+                    {
+                        EndTransformation();
+                    }
                 }
             }
 
             var input = Health.IsAlive ? PlayerInput.CurrentInput : default;
 
-            ProcessInput(input);
-            HandleAltarDeposit(input);
+            ProcessInput(input, globalStopped);
+            HandleAltarDeposit(input, globalStopped);
 
             if (KCC.IsGrounded)
             {
@@ -355,6 +390,16 @@ namespace Starter.Shooter
                 KCC.SetLookRotation(PlayerInput.CurrentInput.LookRotation, -90f, 90f);
             }
 
+            bool muted = IsAudioMuted();
+            if (muted != _lastAudioMuted)
+            {
+                if (muted)
+                {
+                    MuteAllPlayerAudioImmediate();
+                }
+                _lastAudioMuted = muted;
+            }
+
             var moveSpeed = transform.InverseTransformVector(KCC.RealVelocity);
 
             Animator.SetFloat(_animIDSpeedX, moveSpeed.x, 0.1f, Time.deltaTime);
@@ -362,7 +407,7 @@ namespace Starter.Shooter
             Animator.SetBool(_animIDGrounded, KCC.IsGrounded);
             Animator.SetFloat(_animIDPitch, KCC.GetLookRotation(true, false).x, 0.02f, Time.deltaTime);
 
-            FootstepSound.enabled = KCC.IsGrounded && KCC.RealSpeed > 1f;
+            FootstepSound.enabled = !muted && KCC.IsGrounded && KCC.RealSpeed > 1f;
             ScalingRoot.localScale = Vector3.Lerp(ScalingRoot.localScale, Vector3.one, Time.deltaTime * 8f);
 
             var emission = DustParticles.emission;
@@ -405,9 +450,26 @@ namespace Starter.Shooter
             }
         }
 
-        private void ProcessInput(GameplayInput input)
+        private void ProcessInput(GameplayInput input, bool globalStopped)
         {
             KCC.SetLookRotation(input.LookRotation, -90f, 90f);
+
+            if (input.TimeStop)
+            {
+                TryActivateTimeStopUltimate();
+                if (_gameManager == null)
+                {
+                    _gameManager = FindObjectOfType<GameManager>();
+                }
+                globalStopped = _gameManager != null && _gameManager.IsTimeStopped;
+            }
+
+            bool lockedByTimeStop = globalStopped && !TimeStopActive;
+
+            if (lockedByTimeStop)
+            {
+                return;
+            }
 
             if (_isGrappling)
             {
@@ -507,9 +569,12 @@ namespace Starter.Shooter
             SpendSouls(InvisibilitySoulCost);
             _isInvisible = true;
 
-            if (InvisibilitySound != null && InvisibilityClip != null)
+            if (!IsAudioMuted())
             {
-                InvisibilitySound.PlayOneShot(InvisibilityClip);
+                if (InvisibilitySound != null && InvisibilityClip != null)
+                {
+                    InvisibilitySound.PlayOneShot(InvisibilityClip);
+                }
             }
         }
 
@@ -571,9 +636,12 @@ namespace Starter.Shooter
             SpendSouls(HealSoulCost);
             Health.TakeHit(-1);
 
-            if (HealSound != null && HealClip != null)
+            if (!IsAudioMuted())
             {
-                HealSound.PlayOneShot(HealClip);
+                if (HealSound != null && HealClip != null)
+                {
+                    HealSound.PlayOneShot(HealClip);
+                }
             }
         }
 
@@ -615,6 +683,12 @@ namespace Starter.Shooter
         {
             if (ReloadSound == null)
                 return;
+
+            if (IsAudioMuted())
+            {
+                StopReloadSound();
+                return;
+            }
 
             bool shouldPlay = _isReloading;
 
@@ -730,6 +804,8 @@ namespace Starter.Shooter
 
         private void UpdateTransformationVisual()
         {
+            bool muted = IsAudioMuted();
+
             bool angelActive = _isTransformed && _isAngelForm;
             bool demonActive = _isTransformed && !_isAngelForm;
 
@@ -741,43 +817,65 @@ namespace Starter.Shooter
 
             if (AngelSound != null)
             {
-                if (angelActive)
+                if (muted)
                 {
-                    if (!AngelSound.isPlaying)
+                    if (AngelSound.isPlaying)
                     {
-                        if (AngelTransformLoopClip != null && AngelSound.clip != AngelTransformLoopClip)
-                        {
-                            AngelSound.clip = AngelTransformLoopClip;
-                        }
-                        AngelSound.loop = true;
-                        AngelSound.Play();
+                        AngelSound.loop = false;
+                        AngelSound.Stop();
                     }
                 }
-                else if (AngelSound.isPlaying)
+                else
                 {
-                    AngelSound.loop = false;
-                    AngelSound.Stop();
+                    if (angelActive)
+                    {
+                        if (!AngelSound.isPlaying)
+                        {
+                            if (AngelTransformLoopClip != null && AngelSound.clip != AngelTransformLoopClip)
+                            {
+                                AngelSound.clip = AngelTransformLoopClip;
+                            }
+                            AngelSound.loop = true;
+                            AngelSound.Play();
+                        }
+                    }
+                    else if (AngelSound.isPlaying)
+                    {
+                        AngelSound.loop = false;
+                        AngelSound.Stop();
+                    }
                 }
             }
 
             if (DemonSound != null)
             {
-                if (demonActive)
+                if (muted)
                 {
-                    if (!DemonSound.isPlaying)
+                    if (DemonSound.isPlaying)
                     {
-                        if (DemonTransformLoopClip != null && DemonSound.clip != DemonTransformLoopClip)
-                        {
-                            DemonSound.clip = DemonTransformLoopClip;
-                        }
-                        DemonSound.loop = true;
-                        DemonSound.Play();
+                        DemonSound.loop = false;
+                        DemonSound.Stop();
                     }
                 }
-                else if (DemonSound.isPlaying)
+                else
                 {
-                    DemonSound.loop = false;
-                    DemonSound.Stop();
+                    if (demonActive)
+                    {
+                        if (!DemonSound.isPlaying)
+                        {
+                            if (DemonTransformLoopClip != null && DemonSound.clip != DemonTransformLoopClip)
+                            {
+                                DemonSound.clip = DemonTransformLoopClip;
+                            }
+                            DemonSound.loop = true;
+                            DemonSound.Play();
+                        }
+                    }
+                    else if (DemonSound.isPlaying)
+                    {
+                        DemonSound.loop = false;
+                        DemonSound.Stop();
+                    }
                 }
             }
         }
@@ -1115,6 +1213,42 @@ namespace Starter.Shooter
             _fireCount++;
         }
 
+        private void TryActivateTimeStopUltimate()
+        {
+            if (!HasStateAuthority)
+                return;
+
+            if (!Health.IsAlive)
+                return;
+
+            if (TimeStopActive)
+                return;
+
+            if (TimeStopSoulCost <= 0)
+                return;
+
+            if (CarriedSouls < TimeStopSoulCost)
+                return;
+
+            SpendSouls(TimeStopSoulCost);
+            CancelInvisibilityIfActive();
+
+            TimeStopActive = true;
+            TimeStopTimer = TimeStopDuration;
+        }
+
+        private void CancelTimeStop()
+        {
+            if (!HasStateAuthority)
+                return;
+
+            if (!TimeStopActive)
+                return;
+
+            TimeStopActive = false;
+            TimeStopTimer = 0f;
+        }
+
         private void SpendSouls(int amount)
         {
             if (amount <= 0)
@@ -1206,12 +1340,15 @@ namespace Starter.Shooter
             StopTransformLoops();
 
             _isInvisible = false;
+            TimeStopActive = false;
+            TimeStopTimer = 0f;
+
             UpdateInvisibilityVisual();
         }
 
-        private void HandleAltarDeposit(GameplayInput input)
+        private void HandleAltarDeposit(GameplayInput input, bool globalStopped)
         {
-            if (HasStateAuthority == false)
+            if (!HasStateAuthority)
                 return;
 
             if (_altar == null)
@@ -1225,7 +1362,16 @@ namespace Starter.Shooter
                 return;
             }
 
-            if (Health.IsAlive == false)
+            bool lockedByTimeStop = globalStopped && !TimeStopActive;
+
+            if (lockedByTimeStop)
+            {
+                _depositTimer = 0f;
+                _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
+                return;
+            }
+
+            if (!Health.IsAlive)
             {
                 _depositTimer = 0f;
                 _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
@@ -1360,25 +1506,36 @@ namespace Starter.Shooter
         {
             if (_visibleFireCount < _fireCount)
             {
+                bool muted = IsAudioMuted();
+
                 if (_lastShotType == SHOT_NORMAL)
                 {
-                    if (FireSound != null && FireGunClip != null)
+                    if (!muted)
                     {
-                        FireSound.PlayOneShot(FireGunClip);
+                        if (FireSound != null && FireGunClip != null)
+                        {
+                            FireSound.PlayOneShot(FireGunClip);
+                        }
                     }
                 }
                 else if (_lastShotType == SHOT_SPECIAL)
                 {
-                    if (SpecialShotSound != null && SpecialShotClip != null)
+                    if (!muted)
                     {
-                        SpecialShotSound.PlayOneShot(SpecialShotClip);
+                        if (SpecialShotSound != null && SpecialShotClip != null)
+                        {
+                            SpecialShotSound.PlayOneShot(SpecialShotClip);
+                        }
                     }
                 }
                 else if (_lastShotType == SHOT_CAGE)
                 {
-                    if (CageShotSound != null && CageShotClip != null)
+                    if (!muted)
                     {
-                        CageShotSound.PlayOneShot(CageShotClip);
+                        if (CageShotSound != null && CageShotClip != null)
+                        {
+                            CageShotSound.PlayOneShot(CageShotClip);
+                        }
                     }
                 }
 
@@ -1412,6 +1569,9 @@ namespace Starter.Shooter
 
         private void OnJumpingChanged()
         {
+            if (IsAudioMuted())
+                return;
+
             if (_isJumping)
             {
                 AudioSource.PlayClipAtPoint(JumpAudioClip, KCC.Position, 0.5f);
@@ -1435,6 +1595,27 @@ namespace Starter.Shooter
                 return;
 
             Nameplate.SetNickname(Nickname);
+        }
+
+        private bool IsAudioMuted()
+        {
+            if (_gameManager == null)
+                return false;
+
+            return _gameManager.IsTimeStopped;
+        }
+
+        private void MuteAllPlayerAudioImmediate()
+        {
+            if (FootstepSound != null) FootstepSound.Stop();
+            if (FireSound != null) FireSound.Stop();
+            if (ReloadSound != null) ReloadSound.Stop();
+            if (AngelSound != null) AngelSound.Stop();
+            if (DemonSound != null) DemonSound.Stop();
+            if (SpecialShotSound != null) SpecialShotSound.Stop();
+            if (InvisibilitySound != null) InvisibilitySound.Stop();
+            if (HealSound != null) HealSound.Stop();
+            if (CageShotSound != null) CageShotSound.Stop();
         }
     }
 }

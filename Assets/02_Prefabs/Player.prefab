@@ -786,6 +786,10 @@ MonoBehaviour:
     type: 3}
   CageDuration: 30
   CageSoulCost: 1
+  TimeStopSoulCost: 1
+  TimeStopDuration: 6
+  _TimeStopActive:
+    _value: 0
   _Nickname: 
   _ChickenKills: 0
   _CarriedSouls: 0
