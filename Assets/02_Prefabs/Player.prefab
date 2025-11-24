@@ -782,7 +782,7 @@ MonoBehaviour:
   - {fileID: 2150036199710171595}
   - {fileID: 5843104839106062707}
   HealSoulCost: 2
-  CagePrefab: {fileID: 702686775779831918, guid: c52fbeeb87c67e1429387dfcb60c469d,
+  CagePrefab: {fileID: -5537099839950004192, guid: fb2d41828780fa741aba6e0620b83b34,
     type: 3}
   CageDuration: 30
   CageSoulCost: 1
