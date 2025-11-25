@@ -785,8 +785,8 @@ MonoBehaviour:
   CagePrefab: {fileID: -5537099839950004192, guid: fb2d41828780fa741aba6e0620b83b34,
     type: 3}
   CageDuration: 30
-  CageSoulCost: 1
-  TimeStopSoulCost: 1
+  CageSoulCost: 10
+  TimeStopSoulCost: 20
   TimeStopDuration: 6
   _TimeStopActive:
     _value: 0

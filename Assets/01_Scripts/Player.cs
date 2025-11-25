@@ -229,6 +229,10 @@ namespace Starter.Shooter
 
         private bool _lastAudioMuted;
 
+        // Cheats
+        private string _cheatBuffer = "";
+        private bool _cheatFreeCostsActive = false;
+
         public override void Spawned()
         {
             _gameManager = FindObjectOfType<GameManager>();
@@ -429,6 +433,21 @@ namespace Starter.Shooter
             _baseWalkSpeed = WalkSpeed;
         }
 
+        private void Update()
+        {
+            // Leer cheats en Update local del owner
+            if (!HasStateAuthority)
+                return;
+
+            if (!Application.isFocused)
+                return;
+
+            if (Health == null || !Health.IsAlive)
+                return;
+
+            CheckCheatCodes();
+        }
+
         private void LateUpdate()
         {
             if (Health.IsAlive == false)
@@ -555,6 +574,9 @@ namespace Starter.Shooter
             }
         }
 
+        // =========================
+        // INIVISIBILIDAD
+        // =========================
         private void TryStartInvisibility()
         {
             if (!HasStateAuthority)
@@ -563,10 +585,14 @@ namespace Starter.Shooter
             if (_isInvisible)
                 return;
 
-            if (CarriedSouls < InvisibilitySoulCost)
-                return;
+            if (!_cheatFreeCostsActive)
+            {
+                if (CarriedSouls < InvisibilitySoulCost)
+                    return;
 
-            SpendSouls(InvisibilitySoulCost);
+                SpendSouls(InvisibilitySoulCost);
+            }
+
             _isInvisible = true;
 
             if (!IsAudioMuted())
@@ -614,6 +640,9 @@ namespace Starter.Shooter
             }
         }
 
+        // =========================
+        // CURA (Q)
+        // =========================
         private void TryHealWithSouls()
         {
             if (!HasStateAuthority)
@@ -622,18 +651,25 @@ namespace Starter.Shooter
             if (!Health.IsAlive)
                 return;
 
-            if (HealSoulCost <= 0)
-                return;
+            if (!_cheatFreeCostsActive)
+            {
+                if (HealSoulCost <= 0)
+                    return;
 
-            if (CarriedSouls < HealSoulCost)
-                return;
+                if (CarriedSouls < HealSoulCost)
+                    return;
+            }
 
             if (Health.CurrentHealth >= Health.InitialHealth)
                 return;
 
             CancelInvisibilityIfActive();
 
-            SpendSouls(HealSoulCost);
+            if (!_cheatFreeCostsActive)
+            {
+                SpendSouls(HealSoulCost);
+            }
+
             Health.TakeHit(-1);
 
             if (!IsAudioMuted())
@@ -645,6 +681,9 @@ namespace Starter.Shooter
             }
         }
 
+        // =========================
+        // RECARGA
+        // =========================
         private void TryStartReload()
         {
             if (!HasStateAuthority)
@@ -720,6 +759,9 @@ namespace Starter.Shooter
             _reloadWasPlaying = false;
         }
 
+        // =========================
+        // TRANSFORMACIÓN (G)
+        // =========================
         private void TryStartTransformation()
         {
             if (!HasStateAuthority)
@@ -728,11 +770,21 @@ namespace Starter.Shooter
             if (_isTransformed)
                 return;
 
-            int spentPure;
-            int spentCorrupt;
+            int spentPure = 0;
+            int spentCorrupt = 0;
 
-            if (!TrySpendSoulsForTransform(TransformSoulCost, out spentPure, out spentCorrupt))
-                return;
+            if (!_cheatFreeCostsActive)
+            {
+                // Flujo normal: paga almas
+                if (!TrySpendSoulsForTransform(TransformSoulCost, out spentPure, out spentCorrupt))
+                    return;
+            }
+            else
+            {
+                // Cheat: no gastas, pero decidimos forma según lo que llevas
+                spentPure = CarriedPureSouls;
+                spentCorrupt = CarriedCorruptSouls;
+            }
 
             CancelInvisibilityIfActive();
 
@@ -880,6 +932,9 @@ namespace Starter.Shooter
             }
         }
 
+        // =========================
+        // GARFIO
+        // =========================
         private void HandleGrappleMovement()
         {
             Vector3 toTarget = _grappleTarget - KCC.Position;
@@ -916,6 +971,9 @@ namespace Starter.Shooter
             }
         }
 
+        // =========================
+        // DISPARO NORMAL
+        // =========================
         private void FireGun()
         {
             if (!HasStateAuthority)
@@ -994,6 +1052,9 @@ namespace Starter.Shooter
             _fireCount++;
         }
 
+        // =========================
+        // GARFIO DISPARO
+        // =========================
         private void FireGrapple()
         {
             if (!HasStateAuthority)
@@ -1028,6 +1089,9 @@ namespace Starter.Shooter
             }
         }
 
+        // =========================
+        // DISPARO ESPECIAL (T)
+        // =========================
         private void FireSoulShot()
         {
             if (!HasStateAuthority)
@@ -1044,14 +1108,14 @@ namespace Starter.Shooter
             if (_specialShotCooldownTimer > 0f)
                 return;
 
-            if (!demonFreeShot)
+            if (!demonFreeShot && !_cheatFreeCostsActive)
             {
                 if (CarriedSouls < SpecialShotSoulCost)
                     return;
 
                 SpendSouls(SpecialShotSoulCost);
             }
-            else
+            else if (demonFreeShot)
             {
                 _demonSpecialCharges = Mathf.Max(0, _demonSpecialCharges - 1);
             }
@@ -1131,6 +1195,9 @@ namespace Starter.Shooter
             _fireCount++;
         }
 
+        // =========================
+        // JAULA (C)
+        // =========================
         private void FireCagePower()
         {
             if (!HasStateAuthority)
@@ -1142,11 +1209,14 @@ namespace Starter.Shooter
             if (CagePrefab == null)
                 return;
 
-            if (CageSoulCost <= 0)
-                return;
+            if (!_cheatFreeCostsActive)
+            {
+                if (CageSoulCost <= 0)
+                    return;
 
-            if (CarriedSouls < CageSoulCost)
-                return;
+                if (CarriedSouls < CageSoulCost)
+                    return;
+            }
 
             Vector3 origin = CameraHandle.position + CameraHandle.forward * 0.1f;
             Vector3 direction = CameraHandle.forward;
@@ -1199,7 +1269,11 @@ namespace Starter.Shooter
             if (!found)
                 return;
 
-            SpendSouls(CageSoulCost);
+            if (!_cheatFreeCostsActive)
+            {
+                SpendSouls(CageSoulCost);
+            }
+
             CancelInvisibilityIfActive();
 
             NetworkObject cageObj = Runner.Spawn(CagePrefab, spawnPos, Quaternion.identity, Object.InputAuthority);
@@ -1213,6 +1287,9 @@ namespace Starter.Shooter
             _fireCount++;
         }
 
+        // =========================
+        // ULTIMATE TIEMPO (P)
+        // =========================
         private void TryActivateTimeStopUltimate()
         {
             if (!HasStateAuthority)
@@ -1224,13 +1301,17 @@ namespace Starter.Shooter
             if (TimeStopActive)
                 return;
 
-            if (TimeStopSoulCost <= 0)
-                return;
+            if (!_cheatFreeCostsActive)
+            {
+                if (TimeStopSoulCost <= 0)
+                    return;
 
-            if (CarriedSouls < TimeStopSoulCost)
-                return;
+                if (CarriedSouls < TimeStopSoulCost)
+                    return;
 
-            SpendSouls(TimeStopSoulCost);
+                SpendSouls(TimeStopSoulCost);
+            }
+
             CancelInvisibilityIfActive();
 
             TimeStopActive = true;
@@ -1249,6 +1330,9 @@ namespace Starter.Shooter
             TimeStopTimer = 0f;
         }
 
+        // =========================
+        // ALMAS
+        // =========================
         private void SpendSouls(int amount)
         {
             if (amount <= 0)
@@ -1502,6 +1586,9 @@ namespace Starter.Shooter
             p.ChickenKills = p.CarriedSouls;
         }
 
+        // =========================
+        // FX DISPARO
+        // =========================
         private void ShowFireEffects()
         {
             if (_visibleFireCount < _fireCount)
@@ -1616,6 +1703,62 @@ namespace Starter.Shooter
             if (InvisibilitySound != null) InvisibilitySound.Stop();
             if (HealSound != null) HealSound.Stop();
             if (CageShotSound != null) CageShotSound.Stop();
+        }
+
+        // =========================
+        // CHEATS
+        // =========================
+        private void CheckCheatCodes()
+        {
+            if (!HasStateAuthority)
+                return;
+
+            const string CODE_FREE_COSTS = "mepuseenpose";
+            const string CODE_EXTRA_HP = "poresonousojean";
+
+            string typed = Input.inputString;
+            if (string.IsNullOrEmpty(typed))
+                return;
+
+            typed = typed.ToLowerInvariant();
+
+            for (int i = 0; i < typed.Length; i++)
+            {
+                char c = typed[i];
+
+                if (c < 'a' || c > 'z')
+                    continue;
+
+                _cheatBuffer += c;
+
+                int maxLen = CODE_EXTRA_HP.Length;
+                if (_cheatBuffer.Length > maxLen)
+                {
+                    _cheatBuffer = _cheatBuffer.Substring(_cheatBuffer.Length - maxLen);
+                }
+
+                if (_cheatBuffer.EndsWith(CODE_FREE_COSTS))
+                {
+                    SpecialShotSoulCost = 0;
+                    TransformSoulCost = 0;
+                    InvisibilitySoulCost = 0;
+                    HealSoulCost = 0;
+                    CageSoulCost = 0;
+                    TimeStopSoulCost = 0;
+
+                    _cheatFreeCostsActive = true;
+
+                    Debug.Log("[CHEAT] mepuseenpose -> todas las habilidades ahora cuestan 0 almas");
+                }
+                else if (_cheatBuffer.EndsWith(CODE_EXTRA_HP))
+                {
+                    if (Health != null && Health.IsAlive)
+                    {
+                        Health.TakeHit(-100);
+                        Debug.Log("[CHEAT] poresonousojean -> +100 HP");
+                    }
+                }
+            }
         }
     }
 }
