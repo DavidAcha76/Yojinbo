@@ -7,10 +7,11 @@ namespace Starter.Shooter
 {
     public sealed class Player : NetworkBehaviour
     {
-        private const byte SHOT_NONE = 0;
-        private const byte SHOT_NORMAL = 1;
-        private const byte SHOT_SPECIAL = 2;
-        private const byte SHOT_CAGE = 3;
+        // Tipos de disparo
+        public const byte SHOT_NONE = 0;
+        public const byte SHOT_NORMAL = 1;
+        public const byte SHOT_SPECIAL = 2;
+        public const byte SHOT_CAGE = 3;
 
         [Header("References")]
         public Health Health;
@@ -103,8 +104,6 @@ namespace Starter.Shooter
         public float SpecialShotRange = 200f;
         public LayerMask SpecialShotHitMask;
 
-        private float _specialShotCooldownTimer;
-
         [Header("Ammo Setup")]
         public int MaxAmmo = 20;
         public float ReloadDuration = 3f;
@@ -113,7 +112,7 @@ namespace Starter.Shooter
         public int CurrentAmmo { get; set; }
 
         [Networked]
-        private NetworkBool _isReloading { get; set; }
+        internal NetworkBool _isReloading { get; set; }
 
         private float _reloadTimer;
         private bool _reloadWasPlaying;
@@ -132,14 +131,14 @@ namespace Starter.Shooter
         public int DemonBonusHealth = 15;
 
         [Networked]
-        private NetworkBool _isTransformed { get; set; }
+        internal NetworkBool _isTransformed { get; set; }
 
         [Networked]
-        private NetworkBool _isAngelForm { get; set; }
+        internal NetworkBool _isAngelForm { get; set; }
 
-        private float _transformTimer;
-        private float _baseWalkSpeed;
-        private int _demonSpecialCharges;
+        internal float _transformTimer;
+        internal float _baseWalkSpeed;
+        internal int _demonSpecialCharges;
 
         [Header("Invisibility Settings")]
         public int InvisibilitySoulCost = 5;
@@ -161,16 +160,28 @@ namespace Starter.Shooter
         public NetworkBool TimeStopActive { get; set; }
 
         [Networked]
-        private float TimeStopTimer { get; set; }
+        internal float TimeStopTimer { get; set; }
+
+        [Header("Arena Zone (Nuevo Poder)")]
+        public NetworkObject ArenaZonePrefab;
+        public float ArenaZoneDuration = 20f;
+        public int ArenaZoneSoulCost = 25;
+        public float ArenaSpeedMultiplier = 2f;
+        public float ArenaKillSoulBonusMultiplier = 1.0f;
+        public VolumeProfile ArenaZonePostProcessProfile;
+
+        // Flag de buff del jugador cuando está en la arena
+        [Networked]
+        public NetworkBool ArenaBuffActive { get; set; }
 
         public bool IsTransformed => _isTransformed;
         public bool IsAngelForm => _isTransformed && _isAngelForm;
         public bool IsDemonForm => _isTransformed && !_isAngelForm;
-        public bool IsInvisible => _isInvisible;
-        public int DemonSpecialCharges => _demonSpecialCharges;
 
         [Networked]
-        private NetworkBool _isInvisible { get; set; }
+        internal NetworkBool _isInvisible { get; set; }
+
+        public bool IsInvisible => _isInvisible;
 
         [Networked, HideInInspector, Capacity(24), OnChangedRender(nameof(OnNicknameChanged))]
         public string Nickname { get; set; }
@@ -197,17 +208,19 @@ namespace Starter.Shooter
         public int BankedCorruptSouls { get; set; }
 
         [Networked, OnChangedRender(nameof(OnJumpingChanged))]
-        private NetworkBool _isJumping { get; set; }
+        internal NetworkBool _isJumping { get; set; }
 
         [Networked]
-        private Vector3 _hitPosition { get; set; }
-        [Networked]
-        private Vector3 _hitNormal { get; set; }
-        [Networked]
-        private int _fireCount { get; set; }
+        internal Vector3 _hitPosition { get; set; }
 
         [Networked]
-        private byte _lastShotType { get; set; }
+        internal Vector3 _hitNormal { get; set; }
+
+        [Networked]
+        internal int _fireCount { get; set; }
+
+        [Networked]
+        internal byte _lastShotType { get; set; }
 
         private int _animIDSpeedX;
         private int _animIDSpeedZ;
@@ -233,6 +246,17 @@ namespace Starter.Shooter
         private string _cheatBuffer = "";
         private bool _cheatFreeCostsActive = false;
 
+        internal bool CheatFreeCostsActive => _cheatFreeCostsActive;
+
+        [Header("Abilities")]
+        public Ability_Invisibility InvisibilityAbility;
+        public Ability_Heal HealAbility;
+        public Ability_Transform TransformAbility;
+        public Ability_SpecialShot SpecialShotAbility;
+        public Ability_Cage CageAbility;
+        public Ability_TimeStop TimeStopAbility;
+        public Ability_ArenaZone ArenaZoneAbility;
+
         public override void Spawned()
         {
             _gameManager = FindObjectOfType<GameManager>();
@@ -242,6 +266,7 @@ namespace Starter.Shooter
                 _altar = AltarOverride != null ? AltarOverride : FindObjectOfType<SoulAltar>();
                 Nickname = PlayerPrefs.GetString("PlayerName");
                 CurrentAmmo = MaxAmmo;
+
                 _isInvisible = false;
                 _isTransformed = false;
                 _isAngelForm = false;
@@ -249,6 +274,7 @@ namespace Starter.Shooter
                 _isReloading = false;
                 TimeStopActive = false;
                 TimeStopTimer = 0f;
+                ArenaBuffActive = false;
             }
 
             OnNicknameChanged();
@@ -274,10 +300,18 @@ namespace Starter.Shooter
             if (AngelWings != null) AngelWings.SetActive(false);
             if (DemonWings != null) DemonWings.SetActive(false);
 
-            StopTransformLoops();
             StopReloadSound();
-            UpdateInvisibilityVisual();
-            UpdateTransformationVisual();
+
+            if (InvisibilityAbility != null) InvisibilityAbility.Initialize(this);
+            if (HealAbility != null) HealAbility.Initialize(this);
+            if (TransformAbility != null) TransformAbility.Initialize(this);
+            if (SpecialShotAbility != null) SpecialShotAbility.Initialize(this);
+            if (CageAbility != null) CageAbility.Initialize(this);
+            if (TimeStopAbility != null) TimeStopAbility.Initialize(this);
+            if (ArenaZoneAbility != null) ArenaZoneAbility.Initialize(this);
+
+            InvisibilityAbility?.UpdateVisual();
+            TransformAbility?.UpdateVisual();
         }
 
         public override void FixedUpdateNetwork()
@@ -289,16 +323,6 @@ namespace Starter.Shooter
 
             bool globalStopped = _gameManager != null && _gameManager.IsTimeStopped;
             bool myTimeFlow = !globalStopped || TimeStopActive;
-
-            if (HasStateAuthority && TimeStopActive)
-            {
-                TimeStopTimer -= Runner.DeltaTime;
-                if (TimeStopTimer <= 0f)
-                {
-                    TimeStopActive = false;
-                    TimeStopTimer = 0f;
-                }
-            }
 
             if (KCC.Position.y < -15f && !_isTransformed)
             {
@@ -323,9 +347,10 @@ namespace Starter.Shooter
                 }
 
                 StopReloadSound();
-                StopTransformLoops();
+                TransformAbility?.StopTransformLoops();
                 CancelInvisibilityIfActive();
-                CancelTimeStop();
+                TimeStopAbility?.Cancel();
+                ArenaZoneAbility?.ForceStopArena();
 
                 if (canRespawn)
                 {
@@ -346,11 +371,13 @@ namespace Starter.Shooter
 
             if (myTimeFlow)
             {
-                if (_specialShotCooldownTimer > 0f)
+                SpecialShotAbility?.Tick(Runner.DeltaTime);
+                TimeStopAbility?.Tick(Runner.DeltaTime);
+                ArenaZoneAbility?.Tick(Runner.DeltaTime);
+
+                if (HasStateAuthority && _isTransformed)
                 {
-                    _specialShotCooldownTimer -= Runner.DeltaTime;
-                    if (_specialShotCooldownTimer < 0f)
-                        _specialShotCooldownTimer = 0f;
+                    TransformAbility?.Tick(Runner.DeltaTime);
                 }
 
                 if (HasStateAuthority && _isReloading)
@@ -360,15 +387,6 @@ namespace Starter.Shooter
                     {
                         _isReloading = false;
                         CurrentAmmo = MaxAmmo;
-                    }
-                }
-
-                if (HasStateAuthority && _isTransformed)
-                {
-                    _transformTimer -= Runner.DeltaTime;
-                    if (_transformTimer <= 0f)
-                    {
-                        EndTransformation();
                     }
                 }
             }
@@ -421,8 +439,8 @@ namespace Starter.Shooter
 
             Hitbox.enabled = Health.IsAlive && !(_isTransformed && _isAngelForm);
 
-            UpdateInvisibilityVisual();
-            UpdateTransformationVisual();
+            InvisibilityAbility?.UpdateVisual();
+            TransformAbility?.UpdateVisual();
             UpdateReloadSoundVisual();
             UpdateReloadShootAnimation();
         }
@@ -435,7 +453,6 @@ namespace Starter.Shooter
 
         private void Update()
         {
-            // Leer cheats en Update local del owner
             if (!HasStateAuthority)
                 return;
 
@@ -469,13 +486,18 @@ namespace Starter.Shooter
             }
         }
 
+        // ========================================
+        // INPUT + MOVIMIENTO (incluye buff de arena)
+        // ========================================
         private void ProcessInput(GameplayInput input, bool globalStopped)
         {
             KCC.SetLookRotation(input.LookRotation, -90f, 90f);
 
+            // Time Stop (P)
             if (input.TimeStop)
             {
-                TryActivateTimeStopUltimate();
+                TimeStopAbility?.TryActivate();
+
                 if (_gameManager == null)
                 {
                     _gameManager = FindObjectOfType<GameManager>();
@@ -499,7 +521,10 @@ namespace Starter.Shooter
             KCC.SetGravity(KCC.RealVelocity.y >= 0f ? UpGravity : DownGravity);
 
             var moveDirection = KCC.TransformRotation * new Vector3(input.MoveDirection.x, 0f, input.MoveDirection.y);
-            var desiredMoveVelocity = moveDirection * WalkSpeed;
+
+            // Buff de velocidad mientras ArenaBuffActive = true
+            float speedMultiplier = ArenaBuffActive ? ArenaSpeedMultiplier : 1f;
+            var desiredMoveVelocity = moveDirection * (WalkSpeed * speedMultiplier);
 
             float acceleration;
             if (desiredMoveVelocity == Vector3.zero)
@@ -518,7 +543,9 @@ namespace Starter.Shooter
 
             if (canJump && input.Jump)
             {
-                jumpImpulse = JumpImpulse;
+                // Buff de salto cuando ArenaBuffActive
+                float jumpMult = ArenaBuffActive ? ArenaSpeedMultiplier : 1f;
+                jumpImpulse = JumpImpulse * jumpMult;
                 _isJumping = true;
             }
 
@@ -527,26 +554,31 @@ namespace Starter.Shooter
             var pitchRotation = KCC.GetLookRotation(true, false);
             CameraPivot.localRotation = Quaternion.Euler(pitchRotation);
 
+            // Transformación (G)
             if (input.Transform)
             {
-                TryStartTransformation();
+                TransformAbility?.TryStartTransformation();
             }
 
+            // Invisibilidad (F)
             if (input.Invisibility)
             {
-                TryStartInvisibility();
+                InvisibilityAbility?.TryStartInvisibility();
             }
 
+            // Curar (Q)
             if (input.Heal)
             {
-                TryHealWithSouls();
+                HealAbility?.TryHeal();
             }
 
+            // Recarga (R)
             if (input.Reload)
             {
                 TryStartReload();
             }
 
+            // Disparo normal
             if (input.Fire)
             {
                 if (!_isTransformed || !_isAngelForm)
@@ -558,54 +590,40 @@ namespace Starter.Shooter
                 }
             }
 
+            // Garfio
             if (input.AltFire)
             {
                 FireGrapple();
             }
 
+            // Disparo especial (T)
             if (input.SpecialFire)
             {
-                FireSoulShot();
+                SpecialShotAbility?.FireSpecialShot();
             }
 
+            // Jaula (C)
             if (input.Cage)
             {
-                FireCagePower();
+                CageAbility?.FireCage();
+            }
+
+            // Arena (Z)
+            if (input.ArenaZone)
+            {
+                ArenaZoneAbility?.TryActivateArena();
             }
         }
 
-        // =========================
-        // INIVISIBILIDAD
-        // =========================
-        private void TryStartInvisibility()
+        // ==== Invisibilidad (cancel) ====
+        internal void CancelInvisibilityIfActive()
         {
-            if (!HasStateAuthority)
-                return;
-
-            if (_isInvisible)
-                return;
-
-            if (!_cheatFreeCostsActive)
+            if (InvisibilityAbility != null)
             {
-                if (CarriedSouls < InvisibilitySoulCost)
-                    return;
-
-                SpendSouls(InvisibilitySoulCost);
+                InvisibilityAbility.CancelIfActive();
+                return;
             }
 
-            _isInvisible = true;
-
-            if (!IsAudioMuted())
-            {
-                if (InvisibilitySound != null && InvisibilityClip != null)
-                {
-                    InvisibilitySound.PlayOneShot(InvisibilityClip);
-                }
-            }
-        }
-
-        private void CancelInvisibilityIfActive()
-        {
             if (!HasStateAuthority)
                 return;
 
@@ -615,75 +633,13 @@ namespace Starter.Shooter
             _isInvisible = false;
         }
 
-        private void UpdateInvisibilityVisual()
+        // Wrapper para Ability_ArenaZone
+        public void CancelInvisibilityIfActive_Internal()
         {
-            if (InvisibilityRenderers == null || InvisibilityRenderers.Length == 0)
-            {
-                InvisibilityRenderers = GetComponentsInChildren<Renderer>(true);
-            }
-
-            bool hideForThisClient = _isInvisible && !HasStateAuthority;
-
-            if (InvisibilityRenderers != null)
-            {
-                for (int i = 0; i < InvisibilityRenderers.Length; i++)
-                {
-                    var r = InvisibilityRenderers[i];
-                    if (r == null) continue;
-                    r.enabled = !hideForThisClient;
-                }
-            }
-
-            if (Nameplate != null && Nameplate.gameObject != null)
-            {
-                Nameplate.gameObject.SetActive(!hideForThisClient);
-            }
-        }
-
-        // =========================
-        // CURA (Q)
-        // =========================
-        private void TryHealWithSouls()
-        {
-            if (!HasStateAuthority)
-                return;
-
-            if (!Health.IsAlive)
-                return;
-
-            if (!_cheatFreeCostsActive)
-            {
-                if (HealSoulCost <= 0)
-                    return;
-
-                if (CarriedSouls < HealSoulCost)
-                    return;
-            }
-
-            if (Health.CurrentHealth >= Health.InitialHealth)
-                return;
-
             CancelInvisibilityIfActive();
-
-            if (!_cheatFreeCostsActive)
-            {
-                SpendSouls(HealSoulCost);
-            }
-
-            Health.TakeHit(-1);
-
-            if (!IsAudioMuted())
-            {
-                if (HealSound != null && HealClip != null)
-                {
-                    HealSound.PlayOneShot(HealClip);
-                }
-            }
         }
 
-        // =========================
-        // RECARGA
-        // =========================
+        // ==== Recarga ====
         private void TryStartReload()
         {
             if (!HasStateAuthority)
@@ -759,182 +715,7 @@ namespace Starter.Shooter
             _reloadWasPlaying = false;
         }
 
-        // =========================
-        // TRANSFORMACIÓN (G)
-        // =========================
-        private void TryStartTransformation()
-        {
-            if (!HasStateAuthority)
-                return;
-
-            if (_isTransformed)
-                return;
-
-            int spentPure = 0;
-            int spentCorrupt = 0;
-
-            if (!_cheatFreeCostsActive)
-            {
-                // Flujo normal: paga almas
-                if (!TrySpendSoulsForTransform(TransformSoulCost, out spentPure, out spentCorrupt))
-                    return;
-            }
-            else
-            {
-                // Cheat: no gastas, pero decidimos forma según lo que llevas
-                spentPure = CarriedPureSouls;
-                spentCorrupt = CarriedCorruptSouls;
-            }
-
-            CancelInvisibilityIfActive();
-
-            bool angel = spentPure >= spentCorrupt;
-
-            _isTransformed = true;
-            _isAngelForm = angel;
-            _transformTimer = TransformDuration;
-
-            _baseWalkSpeed = WalkSpeed;
-
-            if (angel)
-            {
-                WalkSpeed = _baseWalkSpeed * AngelSpeedMultiplier;
-                _demonSpecialCharges = 0;
-            }
-            else
-            {
-                WalkSpeed = _baseWalkSpeed * DemonSpeedMultiplier;
-                _demonSpecialCharges = DemonMaxSpecialCharges;
-
-                if (Health != null && DemonBonusHealth > 0)
-                {
-                    Health.TakeHit(-DemonBonusHealth);
-                }
-            }
-        }
-
-        private void EndTransformation()
-        {
-            bool wasDemon = _isTransformed && !_isAngelForm;
-
-            _isTransformed = false;
-            _isAngelForm = false;
-            _transformTimer = 0f;
-
-            WalkSpeed = _baseWalkSpeed;
-            _demonSpecialCharges = 0;
-
-            if (wasDemon && Health != null)
-            {
-                if (Health.CurrentHealth > Health.InitialHealth)
-                {
-                    int extra = Health.CurrentHealth - Health.InitialHealth;
-                    if (extra > 0)
-                    {
-                        Health.TakeHit(extra, true);
-                    }
-                }
-            }
-
-            StopTransformLoops();
-        }
-
-        private void StopTransformLoops()
-        {
-            if (AngelSound != null)
-            {
-                AngelSound.loop = false;
-                AngelSound.Stop();
-            }
-
-            if (DemonSound != null)
-            {
-                DemonSound.loop = false;
-                DemonSound.Stop();
-            }
-        }
-
-        private void UpdateTransformationVisual()
-        {
-            bool muted = IsAudioMuted();
-
-            bool angelActive = _isTransformed && _isAngelForm;
-            bool demonActive = _isTransformed && !_isAngelForm;
-
-            if (AngelWings != null && AngelWings.activeSelf != angelActive)
-                AngelWings.SetActive(angelActive);
-
-            if (DemonWings != null && DemonWings.activeSelf != demonActive)
-                DemonWings.SetActive(demonActive);
-
-            if (AngelSound != null)
-            {
-                if (muted)
-                {
-                    if (AngelSound.isPlaying)
-                    {
-                        AngelSound.loop = false;
-                        AngelSound.Stop();
-                    }
-                }
-                else
-                {
-                    if (angelActive)
-                    {
-                        if (!AngelSound.isPlaying)
-                        {
-                            if (AngelTransformLoopClip != null && AngelSound.clip != AngelTransformLoopClip)
-                            {
-                                AngelSound.clip = AngelTransformLoopClip;
-                            }
-                            AngelSound.loop = true;
-                            AngelSound.Play();
-                        }
-                    }
-                    else if (AngelSound.isPlaying)
-                    {
-                        AngelSound.loop = false;
-                        AngelSound.Stop();
-                    }
-                }
-            }
-
-            if (DemonSound != null)
-            {
-                if (muted)
-                {
-                    if (DemonSound.isPlaying)
-                    {
-                        DemonSound.loop = false;
-                        DemonSound.Stop();
-                    }
-                }
-                else
-                {
-                    if (demonActive)
-                    {
-                        if (!DemonSound.isPlaying)
-                        {
-                            if (DemonTransformLoopClip != null && DemonSound.clip != DemonTransformLoopClip)
-                            {
-                                DemonSound.clip = DemonTransformLoopClip;
-                            }
-                            DemonSound.loop = true;
-                            DemonSound.Play();
-                        }
-                    }
-                    else if (DemonSound.isPlaying)
-                    {
-                        DemonSound.loop = false;
-                        DemonSound.Stop();
-                    }
-                }
-            }
-        }
-
-        // =========================
-        // GARFIO
-        // =========================
+        // ==== Garfio ====
         private void HandleGrappleMovement()
         {
             Vector3 toTarget = _grappleTarget - KCC.Position;
@@ -971,9 +752,41 @@ namespace Starter.Shooter
             }
         }
 
-        // =========================
-        // DISPARO NORMAL
-        // =========================
+        private void FireGrapple()
+        {
+            if (!HasStateAuthority)
+                return;
+
+            if (GrappleProjectilePrefab == null)
+                return;
+
+            if (_activeGrappleProjectile != null || _isGrappling)
+                return;
+
+            CancelInvisibilityIfActive();
+
+            Transform muzzle = GrappleMuzzle != null ? GrappleMuzzle : CameraHandle;
+            Vector3 spawnPos = muzzle.position;
+            Quaternion spawnRot = Quaternion.Euler(90, 90, -90);
+
+            var projGO = Instantiate(GrappleProjectilePrefab, spawnPos, spawnRot);
+            var proj = projGO.GetComponent<GrappleProjectile>();
+            if (proj != null)
+            {
+                _activeGrappleProjectile = proj;
+
+                proj.Init(
+                    this,
+                    muzzle,
+                    CameraHandle.forward,
+                    GrappleProjectileSpeed,
+                    GrappleMaxDistance,
+                    GrappleHitMask
+                );
+            }
+        }
+
+        // ==== Disparo normal ====
         private void FireGun()
         {
             if (!HasStateAuthority)
@@ -1052,287 +865,14 @@ namespace Starter.Shooter
             _fireCount++;
         }
 
-        // =========================
-        // GARFIO DISPARO
-        // =========================
-        private void FireGrapple()
-        {
-            if (!HasStateAuthority)
-                return;
+        // ==== Time Stop (Ability_TimeStop) ====
+        // Lógica en Ability_TimeStop
 
-            if (GrappleProjectilePrefab == null)
-                return;
+        // ==== Almas ====
+        internal void SpendSoulsInternal(int amount) => SpendSouls(amount);
 
-            if (_activeGrappleProjectile != null || _isGrappling)
-                return;
+        public void SpendSoulsPublic(int amount) => SpendSouls(amount);
 
-            CancelInvisibilityIfActive();
-
-            Transform muzzle = GrappleMuzzle != null ? GrappleMuzzle : CameraHandle;
-            Vector3 spawnPos = muzzle.position;
-            Quaternion spawnRot = Quaternion.Euler(90, 90, -90);
-
-            var projGO = Instantiate(GrappleProjectilePrefab, spawnPos, spawnRot);
-            var proj = projGO.GetComponent<GrappleProjectile>();
-            if (proj != null)
-            {
-                _activeGrappleProjectile = proj;
-
-                proj.Init(
-                    this,
-                    muzzle,
-                    CameraHandle.forward,
-                    GrappleProjectileSpeed,
-                    GrappleMaxDistance,
-                    GrappleHitMask
-                );
-            }
-        }
-
-        // =========================
-        // DISPARO ESPECIAL (T)
-        // =========================
-        private void FireSoulShot()
-        {
-            if (!HasStateAuthority)
-                return;
-
-            if (_isReloading)
-                return;
-
-            if (_isTransformed && _isAngelForm)
-                return;
-
-            bool demonFreeShot = _isTransformed && !_isAngelForm && _demonSpecialCharges > 0;
-
-            if (_specialShotCooldownTimer > 0f)
-                return;
-
-            if (!demonFreeShot && !_cheatFreeCostsActive)
-            {
-                if (CarriedSouls < SpecialShotSoulCost)
-                    return;
-
-                SpendSouls(SpecialShotSoulCost);
-            }
-            else if (demonFreeShot)
-            {
-                _demonSpecialCharges = Mathf.Max(0, _demonSpecialCharges - 1);
-            }
-
-            CancelInvisibilityIfActive();
-
-            _specialShotCooldownTimer = SpecialShotCooldown;
-
-            _hitPosition = Vector3.zero;
-            _hitNormal = Vector3.zero;
-
-            Vector3 origin = CameraHandle.position + CameraHandle.forward * 0.1f;
-            Vector3 direction = CameraHandle.forward;
-            float maxDistance = SpecialShotRange;
-
-            LayerMask mask = SpecialShotHitMask.value != 0 ? SpecialShotHitMask : HitMask;
-
-            RaycastHit[] hits = Physics.RaycastAll(
-                origin,
-                direction,
-                maxDistance,
-                mask,
-                QueryTriggerInteraction.Ignore
-            );
-
-            if (hits != null && hits.Length > 0)
-            {
-                System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-
-                for (int i = 0; i < hits.Length; i++)
-                {
-                    RaycastHit hit = hits[i];
-
-                    if (hit.collider == null)
-                        continue;
-
-                    if (hit.collider.transform.IsChildOf(transform))
-                        continue;
-
-                    _hitPosition = hit.point;
-                    _hitNormal = hit.normal;
-
-                    var health = hit.collider.GetComponentInParent<Health>();
-                    if (health != null && health != Health)
-                    {
-                        var targetPlayer = health.GetComponent<Player>();
-
-                        if (targetPlayer != null && targetPlayer.IsAngelForm)
-                        {
-                            break;
-                        }
-
-                        int damage = SpecialShotDamage;
-
-                        if (demonFreeShot)
-                        {
-                            damage = DemonSpecialShotDamage;
-                        }
-
-                        health.Killed = OnEnemyKilled;
-                        health.TakeHit(damage, true);
-                        break;
-                    }
-
-                    var destructible = hit.collider.GetComponentInParent<DestructiblePlatform>();
-                    if (destructible != null)
-                    {
-                        destructible.DisableTemporarily(10f);
-                        break;
-                    }
-
-                    break;
-                }
-            }
-
-            _lastShotType = SHOT_SPECIAL;
-            _fireCount++;
-        }
-
-        // =========================
-        // JAULA (C)
-        // =========================
-        private void FireCagePower()
-        {
-            if (!HasStateAuthority)
-                return;
-
-            if (!Health.IsAlive)
-                return;
-
-            if (CagePrefab == null)
-                return;
-
-            if (!_cheatFreeCostsActive)
-            {
-                if (CageSoulCost <= 0)
-                    return;
-
-                if (CarriedSouls < CageSoulCost)
-                    return;
-            }
-
-            Vector3 origin = CameraHandle.position + CameraHandle.forward * 0.1f;
-            Vector3 direction = CameraHandle.forward;
-            float maxDistance = 200f;
-
-            RaycastHit[] hits = Physics.RaycastAll(
-                origin,
-                direction,
-                maxDistance,
-                HitMask,
-                QueryTriggerInteraction.Ignore
-            );
-
-            if (hits == null || hits.Length == 0)
-                return;
-
-            System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
-
-            Vector3 spawnPos = Vector3.zero;
-            bool found = false;
-
-            for (int i = 0; i < hits.Length; i++)
-            {
-                RaycastHit hit = hits[i];
-                if (hit.collider == null)
-                    continue;
-
-                if (hit.collider.transform.IsChildOf(transform))
-                    continue;
-
-                var health = hit.collider.GetComponentInParent<Health>();
-                Player targetPlayer = health != null ? health.GetComponent<Player>() : null;
-
-                if (targetPlayer != null)
-                {
-                    spawnPos = targetPlayer.KCC != null ? targetPlayer.KCC.Position : targetPlayer.transform.position;
-                }
-                else
-                {
-                    spawnPos = hit.point;
-                }
-
-                _hitPosition = hit.point;
-                _hitNormal = hit.normal;
-
-                found = true;
-                break;
-            }
-
-            if (!found)
-                return;
-
-            if (!_cheatFreeCostsActive)
-            {
-                SpendSouls(CageSoulCost);
-            }
-
-            CancelInvisibilityIfActive();
-
-            NetworkObject cageObj = Runner.Spawn(CagePrefab, spawnPos, Quaternion.identity, Object.InputAuthority);
-            var cageTrap = cageObj.GetComponent<CageTrap>();
-            if (cageTrap != null)
-            {
-                cageTrap.SetLifetime(CageDuration);
-            }
-
-            _lastShotType = SHOT_CAGE;
-            _fireCount++;
-        }
-
-        // =========================
-        // ULTIMATE TIEMPO (P)
-        // =========================
-        private void TryActivateTimeStopUltimate()
-        {
-            if (!HasStateAuthority)
-                return;
-
-            if (!Health.IsAlive)
-                return;
-
-            if (TimeStopActive)
-                return;
-
-            if (!_cheatFreeCostsActive)
-            {
-                if (TimeStopSoulCost <= 0)
-                    return;
-
-                if (CarriedSouls < TimeStopSoulCost)
-                    return;
-
-                SpendSouls(TimeStopSoulCost);
-            }
-
-            CancelInvisibilityIfActive();
-
-            TimeStopActive = true;
-            TimeStopTimer = TimeStopDuration;
-        }
-
-        private void CancelTimeStop()
-        {
-            if (!HasStateAuthority)
-                return;
-
-            if (!TimeStopActive)
-                return;
-
-            TimeStopActive = false;
-            TimeStopTimer = 0f;
-        }
-
-        // =========================
-        // ALMAS
-        // =========================
         private void SpendSouls(int amount)
         {
             if (amount <= 0)
@@ -1353,6 +893,9 @@ namespace Starter.Shooter
 
             UpdateTotalSouls(this);
         }
+
+        internal bool TrySpendSoulsForTransformInternal(int amount, out int spentPure, out int spentCorrupt)
+            => TrySpendSoulsForTransform(amount, out spentPure, out spentCorrupt);
 
         private bool TrySpendSoulsForTransform(int amount, out int spentPure, out int spentCorrupt)
         {
@@ -1397,6 +940,9 @@ namespace Starter.Shooter
             _isGrappling = false;
             _activeGrappleProjectile = null;
 
+            ArenaBuffActive = false;
+            ArenaZoneAbility?.ForceStopArena();
+
             if (_altar != null)
             {
                 _altar.UpdateDepositUI(false, 0f, _altar.HoldTimeToDeposit);
@@ -1411,8 +957,6 @@ namespace Starter.Shooter
 
             _moveVelocity = Vector3.zero;
 
-            _specialShotCooldownTimer = 0f;
-
             _isReloading = false;
             _reloadTimer = 0f;
             CurrentAmmo = MaxAmmo;
@@ -1421,13 +965,14 @@ namespace Starter.Shooter
             _isTransformed = false;
             _isAngelForm = false;
             _demonSpecialCharges = 0;
-            StopTransformLoops();
+            TransformAbility?.StopTransformLoops();
 
             _isInvisible = false;
             TimeStopActive = false;
             TimeStopTimer = 0f;
 
-            UpdateInvisibilityVisual();
+            InvisibilityAbility?.UpdateVisual();
+            TransformAbility?.UpdateVisual();
         }
 
         private void HandleAltarDeposit(GameplayInput input, bool globalStopped)
@@ -1502,12 +1047,38 @@ namespace Starter.Shooter
             }
         }
 
-        private void OnEnemyKilled(Health enemyHealth)
+        private void DepositSoulsIntoAltar()
+        {
+            if (CarriedSouls <= 0)
+                return;
+
+            BankedPureSouls += CarriedPureSouls;
+            BankedCorruptSouls += CarriedCorruptSouls;
+
+            CarriedPureSouls = 0;
+            CarriedCorruptSouls = 0;
+            CarriedSouls = 0;
+
+            BankedSouls = BankedPureSouls + BankedCorruptSouls;
+
+            UpdateTotalSouls(this);
+        }
+
+        // OJO: internal para Ability_SpecialShot
+        internal void OnEnemyKilled(Health enemyHealth)
         {
             if (enemyHealth.GetComponent<Chicken>() != null)
             {
-                CarriedPureSouls += 1;
-                CarriedSouls += 1;
+                int soulsToAdd = 1;
+
+                // Bonus de la arena al matar pollos
+                if (ArenaBuffActive)
+                {
+                    soulsToAdd = Mathf.RoundToInt(soulsToAdd * ArenaKillSoulBonusMultiplier);
+                }
+
+                CarriedPureSouls += soulsToAdd;
+                CarriedSouls += soulsToAdd;
 
                 UpdateTotalSouls(this);
                 return;
@@ -1531,6 +1102,9 @@ namespace Starter.Shooter
             UpdateTotalSouls(this);
         }
 
+        // ========================================
+        // Robo de almas (usa buff de arena)
+        // ========================================
         private void StealSoulsFromPlayer(Player victim)
         {
             if (victim == null)
@@ -1540,6 +1114,7 @@ namespace Starter.Shooter
             if (victimCarried <= 0)
                 return;
 
+            // Base: 60% de las almas
             int amountToSteal = Mathf.FloorToInt(victimCarried * 0.6f);
             if (amountToSteal <= 0)
                 return;
@@ -1554,27 +1129,20 @@ namespace Starter.Shooter
             if (victim.CarriedSouls < 0)
                 victim.CarriedSouls = 0;
 
-            CarriedCorruptSouls += amountToSteal;
-            CarriedSouls += amountToSteal;
+            // Ganancia base
+            int finalGain = amountToSteal;
+
+            // Si el killer está bajo efecto de la arena:
+            // robas 100% de las almas del victim (escalable con ArenaKillSoulBonusMultiplier).
+            if (ArenaBuffActive)
+            {
+                finalGain = Mathf.RoundToInt(victimCarried * ArenaKillSoulBonusMultiplier);
+            }
+
+            CarriedCorruptSouls += finalGain;
+            CarriedSouls += finalGain;
 
             UpdateTotalSouls(victim);
-            UpdateTotalSouls(this);
-        }
-
-        private void DepositSoulsIntoAltar()
-        {
-            if (CarriedSouls <= 0)
-                return;
-
-            BankedPureSouls += CarriedPureSouls;
-            BankedCorruptSouls += CarriedCorruptSouls;
-
-            CarriedPureSouls = 0;
-            CarriedCorruptSouls = 0;
-            CarriedSouls = 0;
-
-            BankedSouls = BankedPureSouls + BankedCorruptSouls;
-
             UpdateTotalSouls(this);
         }
 
@@ -1586,9 +1154,7 @@ namespace Starter.Shooter
             p.ChickenKills = p.CarriedSouls;
         }
 
-        // =========================
-        // FX DISPARO
-        // =========================
+        // FX disparo
         private void ShowFireEffects()
         {
             if (_visibleFireCount < _fireCount)
@@ -1684,6 +1250,8 @@ namespace Starter.Shooter
             Nameplate.SetNickname(Nickname);
         }
 
+        internal bool IsAudioMutedInternal() => IsAudioMuted();
+
         private bool IsAudioMuted()
         {
             if (_gameManager == null)
@@ -1705,9 +1273,7 @@ namespace Starter.Shooter
             if (CageShotSound != null) CageShotSound.Stop();
         }
 
-        // =========================
-        // CHEATS
-        // =========================
+        // Cheats
         private void CheckCheatCodes()
         {
             if (!HasStateAuthority)
@@ -1745,6 +1311,7 @@ namespace Starter.Shooter
                     HealSoulCost = 0;
                     CageSoulCost = 0;
                     TimeStopSoulCost = 0;
+                    ArenaZoneSoulCost = 0;
 
                     _cheatFreeCostsActive = true;
 

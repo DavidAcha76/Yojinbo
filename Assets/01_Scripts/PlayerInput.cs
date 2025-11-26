@@ -17,6 +17,7 @@ namespace Starter.Shooter
         public bool Heal;
         public bool Cage;
         public bool TimeStop;
+        public bool ArenaZone;   
     }
 
     public sealed class PlayerInput : MonoBehaviour
@@ -38,6 +39,7 @@ namespace Starter.Shooter
             _input.Heal = false;
             _input.Cage = false;
             _input.TimeStop = false;
+            _input.ArenaZone = false;
         }
 
         private void Update()
@@ -61,6 +63,8 @@ namespace Starter.Shooter
             _input.Heal |= Input.GetKeyDown(KeyCode.Q);
             _input.Cage |= Input.GetKeyDown(KeyCode.C);
             _input.TimeStop |= Input.GetKeyDown(KeyCode.P);
+
+            _input.ArenaZone |= Input.GetKeyDown(KeyCode.Z);
         }
     }
 }
