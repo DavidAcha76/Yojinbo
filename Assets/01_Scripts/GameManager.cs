@@ -37,6 +37,16 @@ namespace Starter.Shooter
         [Networked, OnChangedRender(nameof(OnTimeStoppedChanged))]
         public NetworkBool IsTimeStopped { get; set; }
 
+        [Header("Gameplay Music")]
+        [Tooltip("AudioSource que reproduce la música de gameplay (BGM).")]
+        public AudioSource GameplayMusicSource;
+
+        [Tooltip("Clip de música principal de la partida.")]
+        public AudioClip GameplayMusicClip;
+
+        [Tooltip("¿La música de gameplay debe hacer loop?")]
+        public bool LoopGameplayMusic = true;
+
         public Player LocalPlayer { get; private set; }
 
         private SpawnPoint[] _spawnPoints;
@@ -67,6 +77,12 @@ namespace Starter.Shooter
                     IsTimeStopped = false;
                 }
             }
+
+            // Arrancar música de gameplay en cada cliente (solo si el tiempo no está parado)
+            if (!IsTimeStopped)
+            {
+                StartGameplayMusic();
+            }
         }
 
         public override void FixedUpdateNetwork()
@@ -76,6 +92,7 @@ namespace Starter.Shooter
 
             bool timeStopped = false;
 
+            // Revisar si algún jugador tiene activo el Time Stop
             foreach (var playerRef in Runner.ActivePlayers)
             {
                 var playerObject = Runner.GetPlayerObject(playerRef);
@@ -95,6 +112,7 @@ namespace Starter.Shooter
 
             if (MatchEnded == false)
             {
+                // El tiempo de partida solo avanza si no está detenido
                 if (!IsTimeStopped)
                 {
                     MatchTimeRemaining -= Runner.DeltaTime;
@@ -115,6 +133,7 @@ namespace Starter.Shooter
                 }
             }
 
+            // Recalcular BestHunter según almas bancadas
             BestHunter = PlayerRef.None;
             BestHunterBankedSouls = 0;
 
@@ -136,21 +155,36 @@ namespace Starter.Shooter
             }
         }
 
+        /// <summary>
+        /// Se llama en todos los clientes cuando IsTimeStopped cambia (true/false).
+        /// Controla SFX globales de Time Stop y también la música de gameplay.
+        /// </summary>
         private void OnTimeStoppedChanged()
         {
             if (IsTimeStopped)
             {
+                // SFX de inicio de Time Stop
                 if (TimeStopGlobalAudio != null && TimeStopStartClip != null)
                 {
                     TimeStopGlobalAudio.PlayOneShot(TimeStopStartClip);
                 }
+
+                // Pausar música de gameplay mientras el tiempo está detenido
+                if (GameplayMusicSource != null && GameplayMusicSource.isPlaying)
+                {
+                    GameplayMusicSource.Pause();
+                }
             }
             else
             {
+                // SFX de final de Time Stop
                 if (TimeStopGlobalAudio != null && TimeStopEndClip != null)
                 {
                     TimeStopGlobalAudio.PlayOneShot(TimeStopEndClip);
                 }
+
+                // Reanudar música de gameplay cuando el tiempo vuelve a correr
+                ResumeGameplayMusic();
             }
         }
 
@@ -162,6 +196,9 @@ namespace Starter.Shooter
             LocalPlayer = null;
         }
 
+        /// <summary>
+        /// Devuelve el deltaTime "real" del mundo considerando si el tiempo está detenido.
+        /// </summary>
         public static float GetWorldDeltaTime(NetworkRunner runner)
         {
             if (Instance == null)
@@ -173,6 +210,58 @@ namespace Starter.Shooter
                 return 0f;
 
             return runner != null ? runner.DeltaTime : Time.fixedDeltaTime;
+        }
+
+        // ===========================
+        // MÚSICA DE GAMEPLAY (BGM)
+        // ===========================
+
+        /// <summary>
+        /// Inicia la música de gameplay si todo está configurado.
+        /// </summary>
+        private void StartGameplayMusic()
+        {
+            if (GameplayMusicSource == null)
+                return;
+
+            if (GameplayMusicClip != null && GameplayMusicSource.clip != GameplayMusicClip)
+            {
+                GameplayMusicSource.clip = GameplayMusicClip;
+            }
+
+            GameplayMusicSource.loop = LoopGameplayMusic;
+
+            if (!GameplayMusicSource.isPlaying)
+            {
+                GameplayMusicSource.Play();
+            }
+        }
+
+        /// <summary>
+        /// Reanuda la música de gameplay después de un Time Stop.
+        /// Si nunca se ha reproducido, la lanza desde el inicio.
+        /// </summary>
+        private void ResumeGameplayMusic()
+        {
+            if (GameplayMusicSource == null)
+                return;
+
+            if (GameplayMusicClip != null && GameplayMusicSource.clip != GameplayMusicClip)
+            {
+                GameplayMusicSource.clip = GameplayMusicClip;
+            }
+
+            GameplayMusicSource.loop = LoopGameplayMusic;
+
+            // Si estaba pausada, reanudar; si no, iniciar
+            if (GameplayMusicSource.time > 0f && !GameplayMusicSource.isPlaying)
+            {
+                GameplayMusicSource.UnPause();
+            }
+            else if (!GameplayMusicSource.isPlaying)
+            {
+                GameplayMusicSource.Play();
+            }
         }
     }
 }

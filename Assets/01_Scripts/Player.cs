@@ -1273,6 +1273,21 @@ namespace Starter.Shooter
             if (CageShotSound != null) CageShotSound.Stop();
         }
 
+        // ========================================
+        // Registro de disparos desde abilities
+        // ========================================
+        internal void RegisterShotFromAbility(byte shotType, Vector3 hitPos, Vector3 hitNormal)
+        {
+            if (!HasStateAuthority)
+                return;
+
+            _lastShotType = shotType;
+            _hitPosition = hitPos;
+            _hitNormal = hitNormal;
+            _fireCount++;
+        }
+
+
         // Cheats
         private void CheckCheatCodes()
         {
