@@ -6,18 +6,18 @@ namespace Starter.Shooter
     /// <summary>
     /// Plataforma que cae cuando un jugador la pisa.
     /// - Al pisarla: espera "FallDelay" segundos mientras tiembla.
-    /// - Luego cae (activa gravedad).
+    /// - Luego "cae" moviéndose hacia abajo sin usar rigidbody dinámico.
     /// - Permanece caída "RespawnDelay" segundos.
     /// - Después vuelve a su posición inicial y se reactiva.
     /// 
     /// Setup recomendado:
     /// - Mismo GameObject:
-    ///   - Rigidbody
+    ///   - Rigidbody:
     ///       - Use Gravity = false
     ///       - Is Kinematic = true
-    ///   - 2 colliders:
-    ///       1) Uno sólido (isTrigger = false) -> piso.
-    ///       2) Uno trigger (isTrigger = true) -> detector del jugador.
+    ///   - Colliders:
+    ///       - Uno sólido (isTrigger = false) para el piso.
+    ///       - (Opcional) Uno extra con isTrigger = true para detección del player.
     ///   - NetworkObject
     /// </summary>
     [RequireComponent(typeof(Rigidbody))]
@@ -42,14 +42,21 @@ namespace Starter.Shooter
         [Tooltip("Frecuencia del temblor.")]
         public float ShakeFrequency = 20f;
 
+        [Header("Movimiento de caída (sin física dinámica)")]
+        [Tooltip("Distancia que se moverá hacia abajo cuando caiga.")]
+        public float FallDistance = 5f;
+
+        [Tooltip("Velocidad a la que cae (unidades por segundo).")]
+        public float FallSpeed = 10f;
+
         [Header("Protección de spawn")]
-        [Tooltip("Tiempo tras el spawn en el que ignora cualquier trigger para que no caiga sola.")]
+        [Tooltip("Tiempo tras el spawn en el que ignora triggers para que no caiga sola.")]
         public float IgnoreTriggersAfterSpawn = 0.3f;
 
         private Rigidbody _rigidbody;
         private Collider[] _colliders;
 
-        // Posición y rotación inicial
+        // Posición/rotación inicial
         private Vector3 _startPosition;
         private Quaternion _startRotation;
 
@@ -57,8 +64,12 @@ namespace Starter.Shooter
         private float _shakeTimer;
         private Vector3 _shakeBasePos;
 
-        // Para ignorar triggers justo al inicio (solo StateAuthority lo usa)
+        // Timer local para ignorar triggers al inicio (solo lo usa la autoridad)
         private float _ignoreTriggersTimer;
+
+        // Para animar la caída sin física
+        private bool _localIsFalling;
+        private float _currentFallOffset;
 
         // Timers de red
         [Networked]
@@ -67,7 +78,7 @@ namespace Starter.Shooter
         [Networked]
         private TickTimer RespawnTimer { get; set; }
 
-        // Estados
+        // Estados sincronizados
         [Networked, OnChangedRender(nameof(OnTriggeredChanged))]
         public NetworkBool IsTriggered { get; set; }
 
@@ -82,7 +93,7 @@ namespace Starter.Shooter
             _startPosition = transform.position;
             _startRotation = transform.rotation;
 
-            // De entrada TODAS las copias (host y clientes) dejan la plataforma estática
+            // Forzar que SIEMPRE sea kinemático y sin gravedad (para evitar el error de Unity)
             ForceStaticLocal();
 
             if (Object.HasStateAuthority)
@@ -93,6 +104,9 @@ namespace Starter.Shooter
                 RespawnTimer = TickTimer.None;
                 _ignoreTriggersTimer = IgnoreTriggersAfterSpawn;
             }
+
+            _localIsFalling = false;
+            _currentFallOffset = 0f;
         }
 
         public override void FixedUpdateNetwork()
@@ -100,19 +114,19 @@ namespace Starter.Shooter
             if (!Object.HasStateAuthority)
                 return;
 
-            // Ignora triggers un pequeño tiempo tras el spawn para que no se active sola
+            // Ignorar triggers un rato tras el spawn
             if (_ignoreTriggersTimer > 0f)
             {
                 _ignoreTriggersTimer -= Runner.DeltaTime;
             }
 
-            // Si está marcada como "triggered" y el timer expira -> cae
+            // Si está "armada" para caer y el timer expira -> cae
             if (IsTriggered && FallTimer.Expired(Runner))
             {
                 StartFall();
             }
 
-            // Si está abajo y el timer expira -> respawn
+            // Si está abajo y el timer de respawn expira -> respawn
             if (IsDown && RespawnTimer.Expired(Runner))
             {
                 ResetPlatform();
@@ -121,13 +135,13 @@ namespace Starter.Shooter
 
         private void Update()
         {
-            // Temblor visual
+            // Temblor previo a la caída
             if (_shakeTimer > 0f)
             {
                 _shakeTimer -= Time.deltaTime;
 
-                // Solo temblar mientras la plataforma sigue estática
-                if (_rigidbody != null && _rigidbody.isKinematic)
+                // Solo temblar mientras NO está caída y no está en anim de caída
+                if (!_localIsFalling)
                 {
                     float t = Time.time * ShakeFrequency;
 
@@ -137,10 +151,24 @@ namespace Starter.Shooter
                     transform.position = _shakeBasePos + new Vector3(offsetX, offsetY, 0f);
                 }
 
-                if (_shakeTimer <= 0f && _rigidbody != null && _rigidbody.isKinematic)
+                if (_shakeTimer <= 0f && !_localIsFalling)
                 {
                     transform.position = _shakeBasePos;
                 }
+            }
+
+            // Animación de caída sin física
+            if (_localIsFalling)
+            {
+                _currentFallOffset += FallSpeed * Time.deltaTime;
+
+                if (_currentFallOffset >= FallDistance)
+                {
+                    _currentFallOffset = FallDistance;
+                    _localIsFalling = false;
+                }
+
+                transform.position = _startPosition + Vector3.down * _currentFallOffset;
             }
         }
 
@@ -149,7 +177,6 @@ namespace Starter.Shooter
             if (!Object.HasStateAuthority)
                 return;
 
-            // Evitar activarse por colisiones iniciales raras
             if (_ignoreTriggersTimer > 0f)
                 return;
 
@@ -163,27 +190,26 @@ namespace Starter.Shooter
                     return;
             }
 
-            // Empezar proceso de caída
+            // Marcar como triggered y arrancar el timer de caída
             IsTriggered = true;
             FallTimer = TickTimer.CreateFromSeconds(Runner, FallDelay);
         }
 
         /// <summary>
-        /// Cambia visualmente cuando IsTriggered cambia (temblor).
+        /// Se llama en todos los clientes cuando IsTriggered cambia.
+        /// Maneja el inicio/fin del shake.
         /// </summary>
         private void OnTriggeredChanged()
         {
             if (IsTriggered)
             {
-                // Empezar shake
                 _shakeBasePos = transform.position;
                 _shakeTimer = FallDelay;
             }
             else
             {
-                // Cancelar shake
                 _shakeTimer = 0f;
-                if (_rigidbody != null && _rigidbody.isKinematic)
+                if (!_localIsFalling)
                 {
                     transform.position = _shakeBasePos;
                 }
@@ -191,61 +217,52 @@ namespace Starter.Shooter
         }
 
         /// <summary>
-        /// Se llama cuando IsDown cambia (arriba/abajo) para reflejar estado en todos los clientes.
+        /// Se llama cuando IsDown cambia (true = caída, false = arriba).
         /// </summary>
         private void OnDownChanged()
         {
             if (IsDown)
             {
-                // Está caída -> en la autoridad es dinámica, en los demás depende de cómo sincronices transform
-                if (Object.HasStateAuthority)
-                    SetDynamicLocal();
-                else
-                    ForceStaticLocal(); // si usas NetworkTransform, solo sigues la posición, no simulas física
+                // Empezar animación de caída en todos
+                _localIsFalling = true;
+                _currentFallOffset = 0f;
+                _shakeTimer = 0f;
             }
             else
             {
-                // Está arriba -> resetear localmente a estado estático
-                ForceStaticLocal();
+                // Volver a la posición original en todos
+                _localIsFalling = false;
+                _currentFallOffset = 0f;
                 transform.position = _startPosition;
                 transform.rotation = _startRotation;
+                _shakeTimer = 0f;
+
+                ForceStaticLocal();
             }
         }
 
         /// <summary>
-        /// Lógica de caída (solo autoridad).
+        /// Lógica de inicio de caída (solo autoridad).
         /// </summary>
         private void StartFall()
         {
             IsTriggered = false;
             IsDown = true;
 
-            _shakeTimer = 0f;
-
-            // Solo la autoridad realmente simula la física
-            SetDynamicLocal();
-
+            // Arrancamos timer de estar abajo
             RespawnTimer = TickTimer.CreateFromSeconds(Runner, RespawnDelay);
         }
 
         /// <summary>
-        /// Respawn en la posición original (solo autoridad).
+        /// Respawn (solo autoridad).
         /// </summary>
         private void ResetPlatform()
         {
             IsDown = false;
 
-            transform.position = _startPosition;
-            transform.rotation = _startRotation;
-
-            _shakeTimer = 0f;
-
-            SetStaticLocal();
-
             FallTimer = TickTimer.None;
             RespawnTimer = TickTimer.None;
 
-            // Volvemos a ignorar triggers un pequeño tiempo por seguridad
             _ignoreTriggersTimer = IgnoreTriggersAfterSpawn;
         }
 
@@ -254,38 +271,17 @@ namespace Starter.Shooter
         // ==========================
 
         /// <summary>
-        /// Pone la plataforma estática (sin gravedad, kinemática).
+        /// Fuerza Rigidbody como kinemático + sin gravedad (para evitar concave+dinámico).
         /// </summary>
-        private void SetStaticLocal()
+        private void ForceStaticLocal()
         {
             if (_rigidbody != null)
             {
                 _rigidbody.useGravity = false;
                 _rigidbody.isKinematic = true;
-                _rigidbody.linearVelocity = Vector3.zero;
+                _rigidbody.velocity = Vector3.zero;
                 _rigidbody.angularVelocity = Vector3.zero;
             }
-        }
-
-        /// <summary>
-        /// Pone la plataforma dinámica (con gravedad).
-        /// Solo debería llamarse en StateAuthority.
-        /// </summary>
-        private void SetDynamicLocal()
-        {
-            if (_rigidbody != null)
-            {
-                _rigidbody.isKinematic = false;
-                _rigidbody.useGravity = true;
-            }
-        }
-
-        /// <summary>
-        /// Fuerza estado estático local (para todos los peers al spawn).
-        /// </summary>
-        private void ForceStaticLocal()
-        {
-            SetStaticLocal();
 
             if (_colliders != null)
             {
